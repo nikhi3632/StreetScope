@@ -8,11 +8,11 @@ from src.python.core.stream import FrameGrabber, FrameMetrics, StreamMetrics
 class TestFrameGrabberConstruction:
     def test_accepts_url(self):
         fg = FrameGrabber("http://example.com/stream.m3u8")
-        assert fg._url == "http://example.com/stream.m3u8"
+        assert fg.url == "http://example.com/stream.m3u8"
 
     def test_default_max_consecutive_failures(self):
         fg = FrameGrabber("http://example.com/stream.m3u8")
-        assert fg._max_consecutive_failures == 30
+        assert fg.max_consecutive_failures == 30
 
 
 class TestFrameGrabberBeforeStart:
@@ -48,7 +48,7 @@ class TestFrameGrabberContextManager:
         with fg:
             pass
         # Should have called stop without error
-        assert fg._stop_event.is_set()
+        assert fg.stop_event.is_set()
 
 
 class TestFrameGrabberWithFakeStream:

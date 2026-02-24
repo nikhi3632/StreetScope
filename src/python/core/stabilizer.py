@@ -29,14 +29,14 @@ class FrameStabilizer:
         ransac_thresh: float = 3.0,
         min_inlier_ratio: float = 0.5,
     ) -> None:
-        self._prev_gray: np.ndarray | None = None
-        self._feature_params = dict(
+        self.prev_gray: np.ndarray | None = None
+        self.feature_params = dict(
             maxCorners=max_features,
             qualityLevel=quality_level,
             minDistance=min_distance,
             blockSize=7,
         )
-        self._lk_params = dict(
+        self.lk_params = dict(
             winSize=win_size,
             maxLevel=max_level,
             criteria=(
@@ -45,13 +45,13 @@ class FrameStabilizer:
                 0.01,
             ),
         )
-        self._ransac_thresh = ransac_thresh
-        self._min_inlier_ratio = min_inlier_ratio
+        self.ransac_thresh = ransac_thresh
+        self.min_inlier_ratio = min_inlier_ratio
 
     @property
     def is_initialized(self) -> bool:
         """True after the first frame has been processed."""
-        return self._prev_gray is not None
+        return self.prev_gray is not None
 
     def stabilize(self, frame: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         """Stabilize a frame by removing estimated global camera motion.
@@ -70,25 +70,25 @@ class FrameStabilizer:
         h, w = frame.shape[:2]
         identity = np.eye(2, 3, dtype=np.float64)
 
-        if self._prev_gray is None:
-            self._prev_gray = gray
+        if self.prev_gray is None:
+            self.prev_gray = gray
             return frame.copy(), identity
 
         # Detect features in previous frame
-        pts_prev = cv2.goodFeaturesToTrack(self._prev_gray, **self._feature_params)
+        pts_prev = cv2.goodFeaturesToTrack(self.prev_gray, **self.feature_params)
 
         if pts_prev is None or len(pts_prev) < 4:
-            self._prev_gray = gray
+            self.prev_gray = gray
             return frame.copy(), identity
 
         # Track features into current frame
         pts_curr, status, _ = cv2.calcOpticalFlowPyrLK(
-            self._prev_gray, gray, pts_prev, None, **self._lk_params,
+            self.prev_gray, gray, pts_prev, None, **self.lk_params,
         )
 
         good = status.flatten() == 1
         if np.sum(good) < 4:
-            self._prev_gray = gray
+            self.prev_gray = gray
             return frame.copy(), identity
 
         pts_p = pts_prev[good].reshape(-1, 2)
@@ -99,18 +99,18 @@ class FrameStabilizer:
         M, inliers = cv2.estimateAffinePartial2D(
             pts_p, pts_c,
             method=cv2.RANSAC,
-            ransacReprojThreshold=self._ransac_thresh,
+            ransacReprojThreshold=self.ransac_thresh,
         )
 
         if M is None:
-            self._prev_gray = gray
+            self.prev_gray = gray
             return frame.copy(), identity
 
         # Check inlier ratio
         if inliers is not None:
             ratio = np.sum(inliers) / len(inliers)
-            if ratio < self._min_inlier_ratio:
-                self._prev_gray = gray
+            if ratio < self.min_inlier_ratio:
+                self.prev_gray = gray
                 return frame.copy(), identity
 
         # Invert M to get the warp that cancels camera motion
@@ -118,7 +118,7 @@ class FrameStabilizer:
         try:
             M_inv_full = np.linalg.inv(M_full)
         except np.linalg.LinAlgError:
-            self._prev_gray = gray
+            self.prev_gray = gray
             return frame.copy(), identity
 
         M_inv = M_inv_full[:2]
@@ -128,12 +128,12 @@ class FrameStabilizer:
         )
 
         # Use the *original* (unstabilized) gray for next frame's features
-        self._prev_gray = gray
+        self.prev_gray = gray
         return stabilized, M_inv
 
     def reset(self) -> None:
         """Reset internal state (e.g. on stream reconnect)."""
-        self._prev_gray = None
+        self.prev_gray = None
 
 
 class BackgroundModel:
@@ -160,32 +160,28 @@ class BackgroundModel:
         self.warmup_frames = warmup_frames
         self.warmup_alpha = warmup_alpha
 
-        self._background: np.ndarray | None = None
-        self._frame_count: int = 0
-        self._kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
+        self.background_plate: np.ndarray | None = None
+        self.frame_count: int = 0
+        self.kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
 
     @property
     def background(self) -> np.ndarray | None:
         """Current background plate as uint8 BGR, or None before first frame."""
-        if self._background is None:
+        if self.background_plate is None:
             return None
-        return self._background.astype(np.uint8)
-
-    @property
-    def frame_count(self) -> int:
-        return self._frame_count
+        return self.background_plate.astype(np.uint8)
 
     @property
     def is_warmed_up(self) -> bool:
-        return self._frame_count >= self.warmup_frames
+        return self.frame_count >= self.warmup_frames
 
     def effective_alpha(self) -> float:
         """Higher alpha during warmup for fast convergence."""
-        if self._frame_count == 0:
+        if self.frame_count == 0:
             return 1.0  # First frame: adopt entirely
         if not self.is_warmed_up:
             # Linear ramp from warmup_alpha down to self.alpha over warmup period
-            progress = self._frame_count / self.warmup_frames
+            progress = self.frame_count / self.warmup_frames
             return self.alpha + (self.warmup_alpha - self.alpha) * (1.0 - progress)
         return self.alpha
 
@@ -201,18 +197,18 @@ class BackgroundModel:
         frame_f = frame.astype(np.float32)
         alpha = self.effective_alpha()
 
-        if self._background is None:
-            self._background = frame_f.copy()
-            self._frame_count = 1
+        if self.background_plate is None:
+            self.background_plate = frame_f.copy()
+            self.frame_count = 1
             h, w = frame.shape[:2]
             return np.zeros((h, w), dtype=np.uint8)
 
         # EMA update: bg = (1 - alpha) * bg + alpha * frame
-        cv2.accumulateWeighted(frame_f, self._background, alpha)
-        self._frame_count += 1
+        cv2.accumulateWeighted(frame_f, self.background_plate, alpha)
+        self.frame_count += 1
 
         # Absolute diff on uint8 for thresholding
-        bg_uint8 = self._background.astype(np.uint8)
+        bg_uint8 = self.background_plate.astype(np.uint8)
         diff = cv2.absdiff(frame, bg_uint8)
         gray_diff = cv2.cvtColor(diff, cv2.COLOR_BGR2GRAY)
 
@@ -220,7 +216,7 @@ class BackgroundModel:
         _, mask = cv2.threshold(gray_diff, self.threshold, 255, cv2.THRESH_BINARY)
 
         # Morphological cleanup: open removes small noise, close fills small holes
-        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, self._kernel)
-        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, self._kernel)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, self.kernel)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, self.kernel)
 
         return mask

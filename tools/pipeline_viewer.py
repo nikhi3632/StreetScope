@@ -174,9 +174,7 @@ def run(url: str, model_path: str, vehicles_only: bool, conf: float,
     total_tracks = 0
 
     print(f"Model: {model_path} (conf={conf}, warmed up)")
-    print("Stabilizer: FrameStabilizer (sparse LK, 4-DOF affine)")
-    print("Background: EMA model (motion mask filters stationary detections)")
-    print("Tracker: LK hybrid (IC Affine + template correction + appearance basis)")
+    print("Pipeline: detect → track")
     print("Quit: 'q'/Escape in window | close window | Ctrl+C")
     print()
 

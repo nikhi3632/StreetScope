@@ -40,13 +40,13 @@ class StreamMetrics:
     min_interval_ms: float = float("inf")
     max_interval_ms: float = 0.0
     dropped_frames: int = 0
-    _intervals: list[float] = field(default_factory=list)
+    intervals: list[float] = field(default_factory=list)
 
     def update(self, fm: FrameMetrics) -> None:
         self.frames_decoded += 1
         self.total_decode_ms += fm.decode_latency_ms
         if fm.arrival_interval_ms > 0:
-            self._intervals.append(fm.arrival_interval_ms)
+            self.intervals.append(fm.arrival_interval_ms)
             self.min_interval_ms = min(self.min_interval_ms, fm.arrival_interval_ms)
             self.max_interval_ms = max(self.max_interval_ms, fm.arrival_interval_ms)
 
@@ -58,9 +58,9 @@ class StreamMetrics:
 
     @property
     def avg_interval_ms(self) -> float:
-        if not self._intervals:
+        if not self.intervals:
             return 0.0
-        return sum(self._intervals) / len(self._intervals)
+        return sum(self.intervals) / len(self.intervals)
 
     @property
     def effective_fps(self) -> float:
@@ -159,45 +159,45 @@ class FrameGrabber:
 
     def __init__(self, url: str, max_consecutive_failures: int = 30,
                  realtime: bool = False) -> None:
-        self._url = url
-        self._max_consecutive_failures = max_consecutive_failures
-        self._realtime = realtime
+        self.url = url
+        self.max_consecutive_failures = max_consecutive_failures
+        self.realtime = realtime
 
-        self._lock = threading.Lock()
-        self._stop_event = threading.Event()
-        self._thread: threading.Thread | None = None
+        self.lock = threading.Lock()
+        self.stop_event = threading.Event()
+        self.thread: threading.Thread | None = None
 
-        self._latest: tuple[np.ndarray, FrameMetrics] | None = None
-        self._error: BaseException | None = None
-        self._metrics = StreamMetrics()
+        self.latest_frame: tuple[np.ndarray, FrameMetrics] | None = None
+        self.error_value: BaseException | None = None
+        self.stream_metrics = StreamMetrics()
 
     def start(self) -> None:
         """Start the decode thread."""
-        self._thread = threading.Thread(target=self.run, daemon=True)
-        self._thread.start()
+        self.thread = threading.Thread(target=self.run, daemon=True)
+        self.thread.start()
 
     def stop(self) -> None:
         """Signal the decode thread to stop and wait for it."""
-        self._stop_event.set()
-        if self._thread is not None and self._thread.is_alive():
-            self._thread.join(timeout=2.0)
+        self.stop_event.set()
+        if self.thread is not None and self.thread.is_alive():
+            self.thread.join(timeout=2.0)
 
     def latest(self) -> tuple[np.ndarray, FrameMetrics] | None:
         """Return the most recently decoded (frame, metrics) or None."""
-        with self._lock:
-            return self._latest
+        with self.lock:
+            return self.latest_frame
 
     @property
     def error(self) -> BaseException | None:
         """Return the fatal error if the decode thread crashed, else None."""
-        with self._lock:
-            return self._error
+        with self.lock:
+            return self.error_value
 
     @property
     def metrics(self) -> StreamMetrics:
         """Return accumulated stream metrics."""
-        with self._lock:
-            return self._metrics
+        with self.lock:
+            return self.stream_metrics
 
     def __enter__(self):
         return self
@@ -209,15 +209,15 @@ class FrameGrabber:
         """Decode loop — runs in a daemon thread."""
         try:
             for frame, fm in decode_frames(
-                self._url,
-                realtime=self._realtime,
-                max_consecutive_failures=self._max_consecutive_failures,
+                self.url,
+                realtime=self.realtime,
+                max_consecutive_failures=self.max_consecutive_failures,
             ):
-                if self._stop_event.is_set():
+                if self.stop_event.is_set():
                     break
-                with self._lock:
-                    self._latest = (frame, fm)
-                    self._metrics.update(fm)
+                with self.lock:
+                    self.latest_frame = (frame, fm)
+                    self.stream_metrics.update(fm)
         except Exception as exc:
-            with self._lock:
-                self._error = exc
+            with self.lock:
+                self.error_value = exc

@@ -563,14 +563,14 @@ class Tracker:
         max_frames_without_det: int = 30,
     ) -> None:
         self.trail_duration = trail_duration
-        self._match_iou = match_iou
-        self._ncc_kill = ncc_kill
-        self._max_lost = max_frames_without_det
-        self._frame_rate = frame_rate
+        self.match_iou = match_iou
+        self.ncc_kill = ncc_kill
+        self.max_lost = max_frames_without_det
+        self.frame_rate = frame_rate
 
-        self._tracks: list[Track] = []
-        self._next_id: int = 1
-        self._prev_gray: np.ndarray | None = None
+        self.tracks: list[Track] = []
+        self.next_id: int = 1
+        self.prev_gray: np.ndarray | None = None
 
     def update(
         self,
@@ -591,7 +591,7 @@ class Tracker:
 
         # ── 1. LK predict ──────────────────────────────────────────────
         predicted_bboxes: list[tuple[int, int, int, int]] = []
-        for track in self._tracks:
+        for track in self.tracks:
             bbox = track.predict(gray)
             # Clamp to image
             bbox = (
@@ -604,7 +604,7 @@ class Tracker:
 
         # ── 2. Associate detections with tracks (greedy IoU) ───────────
         det_bboxes = [d.bbox for d in detections]
-        n_tracks = len(self._tracks)
+        n_tracks = len(self.tracks)
         n_dets = len(detections)
 
         matched_track: set[int] = set()
@@ -620,7 +620,7 @@ class Tracker:
             while True:
                 idx = np.unravel_index(np.argmax(iou_matrix), iou_matrix.shape)
                 best_iou = iou_matrix[idx]
-                if best_iou < self._match_iou:
+                if best_iou < self.match_iou:
                     break
                 ti, di = int(idx[0]), int(idx[1])
                 matched_track.add(ti)
@@ -632,12 +632,12 @@ class Tracker:
         # Apply template correction for matched pairs
         for ti, di in match_pairs:
             det = detections[di]
-            self._tracks[ti].correct(gray, det.bbox, det.confidence)
+            self.tracks[ti].correct(gray, det.bbox, det.confidence)
 
         # ── 4. Increment lost counter for unmatched tracks ─────────────
         for ti in range(n_tracks):
             if ti not in matched_track:
-                self._tracks[ti].frames_without_detection += 1
+                self.tracks[ti].frames_without_detection += 1
 
         # ── 5. Birth new tracks from unmatched detections ──────────────
         for di in range(n_dets):
@@ -647,11 +647,11 @@ class Tracker:
 
         # ── 6. Kill dead tracks ────────────────────────────────────────
         alive: list[Track] = []
-        for track in self._tracks:
-            if (track.ncc < self._ncc_kill
+        for track in self.tracks:
+            if (track.ncc < self.ncc_kill
                     and track.frames_without_detection > 5):
                 continue
-            if track.frames_without_detection > self._max_lost:
+            if track.frames_without_detection > self.max_lost:
                 continue
             bbox = track.current_bbox()
             w = bbox[2] - bbox[0]
@@ -659,11 +659,11 @@ class Tracker:
             if w <= 0 or h <= 0:
                 continue
             alive.append(track)
-        self._tracks = alive
+        self.tracks = alive
 
         # ── 7. Build output ────────────────────────────────────────────
         results: list[TrackedObject] = []
-        for track in self._tracks:
+        for track in self.tracks:
             bbox = track.current_bbox()
             # Clamp
             bbox = (
@@ -683,7 +683,7 @@ class Tracker:
                 trail=track.get_trail_points(),
             ))
 
-        self._prev_gray = gray
+        self.prev_gray = gray
         return results
 
     def birth_track(self, gray: np.ndarray, det: Detection) -> None:
@@ -703,7 +703,7 @@ class Tracker:
         size = (x2 - x1, y2 - y1)
 
         track = Track(
-            track_id=self._next_id,
+            track_id=self.next_id,
             template=crop,
             origin=origin,
             size=size,
@@ -716,5 +716,5 @@ class Tracker:
         if not track.is_valid:
             return  # Degenerate template (e.g. flat patch)
 
-        self._next_id += 1
-        self._tracks.append(track)
+        self.next_id += 1
+        self.tracks.append(track)

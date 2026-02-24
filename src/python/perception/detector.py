@@ -184,13 +184,13 @@ class YoloDetector:
                  iou_threshold: float = 0.45) -> None:
         opts = ort.SessionOptions()
         opts.log_severity_level = 3  # ERROR only, suppress CoreML partition warnings
-        self._session = ort.InferenceSession(
+        self.session = ort.InferenceSession(
             model_path,
             sess_options=opts,
             providers=["CoreMLExecutionProvider"],
         )
-        self._input_name = self._session.get_inputs()[0].name
-        inp_shape = self._session.get_inputs()[0].shape
+        self.input_name = self.session.get_inputs()[0].name
+        inp_shape = self.session.get_inputs()[0].shape
         self.input_size: int = inp_shape[2]  # 640
         self.conf_threshold = conf_threshold
         self.iou_threshold = iou_threshold
@@ -206,7 +206,7 @@ class YoloDetector:
             List of Detection objects.
         """
         blob, ratio, pad = preprocess(frame, self.input_size)
-        output = self._session.run(None, {self._input_name: blob})[0]
+        output = self.session.run(None, {self.input_name: blob})[0]
         orig_shape = (frame.shape[0], frame.shape[1])
 
         dets = postprocess(output, self.conf_threshold, self.iou_threshold,
@@ -233,41 +233,41 @@ class AsyncDetector:
         iou_threshold: float = 0.45,
         vehicles_only: bool = False,
     ) -> None:
-        self._model_path = model_path
-        self._conf_threshold = conf_threshold
-        self._iou_threshold = iou_threshold
-        self._vehicles_only = vehicles_only
+        self.model_path = model_path
+        self.conf_threshold = conf_threshold
+        self.iou_threshold = iou_threshold
+        self.vehicles_only = vehicles_only
 
-        self._lock = threading.Lock()
-        self._stop_event = threading.Event()
-        self._frame_event = threading.Event()
-        self._thread: threading.Thread | None = None
+        self.lock = threading.Lock()
+        self.stop_event = threading.Event()
+        self.frame_event = threading.Event()
+        self.thread: threading.Thread | None = None
 
-        self._pending_frame: np.ndarray | None = None
-        self._latest_result: tuple[list[Detection], float] | None = None
+        self.pending_frame: np.ndarray | None = None
+        self.latest_result: tuple[list[Detection], float] | None = None
 
     def start(self) -> None:
         """Start the inference thread. Loads the ONNX model."""
-        self._thread = threading.Thread(target=self.run, daemon=True)
-        self._thread.start()
+        self.thread = threading.Thread(target=self.run, daemon=True)
+        self.thread.start()
 
     def stop(self) -> None:
         """Signal the inference thread to stop and wait for it."""
-        self._stop_event.set()
-        self._frame_event.set()  # Unblock if waiting
-        if self._thread is not None and self._thread.is_alive():
-            self._thread.join(timeout=2.0)
+        self.stop_event.set()
+        self.frame_event.set()  # Unblock if waiting
+        if self.thread is not None and self.thread.is_alive():
+            self.thread.join(timeout=2.0)
 
     def submit(self, frame: np.ndarray) -> None:
         """Submit a frame for detection. Non-blocking, overwrites any pending frame."""
-        with self._lock:
-            self._pending_frame = frame
-        self._frame_event.set()
+        with self.lock:
+            self.pending_frame = frame
+        self.frame_event.set()
 
     def latest(self) -> tuple[list[Detection], float] | None:
         """Return the most recent (detections, infer_ms) or None."""
-        with self._lock:
-            return self._latest_result
+        with self.lock:
+            return self.latest_result
 
     def __enter__(self):
         return self
@@ -278,28 +278,28 @@ class AsyncDetector:
     def run(self) -> None:
         """Inference loop — runs in a daemon thread."""
         detector = YoloDetector(
-            self._model_path,
-            conf_threshold=self._conf_threshold,
-            iou_threshold=self._iou_threshold,
+            self.model_path,
+            conf_threshold=self.conf_threshold,
+            iou_threshold=self.iou_threshold,
         )
 
-        while not self._stop_event.is_set():
-            self._frame_event.wait()
-            self._frame_event.clear()
+        while not self.stop_event.is_set():
+            self.frame_event.wait()
+            self.frame_event.clear()
 
-            if self._stop_event.is_set():
+            if self.stop_event.is_set():
                 break
 
-            with self._lock:
-                frame = self._pending_frame
-                self._pending_frame = None
+            with self.lock:
+                frame = self.pending_frame
+                self.pending_frame = None
 
             if frame is None:
                 continue
 
             t0 = time.monotonic()
-            dets = detector.detect(frame, vehicles_only=self._vehicles_only)
+            dets = detector.detect(frame, vehicles_only=self.vehicles_only)
             infer_ms = (time.monotonic() - t0) * 1000.0
 
-            with self._lock:
-                self._latest_result = (dets, infer_ms)
+            with self.lock:
+                self.latest_result = (dets, infer_ms)

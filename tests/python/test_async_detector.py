@@ -10,16 +10,16 @@ MODEL_PATH = "models/yolo11s.onnx"
 class TestAsyncDetectorConstruction:
     def test_accepts_model_path(self):
         det = AsyncDetector(MODEL_PATH)
-        assert det._model_path == MODEL_PATH
+        assert det.model_path == MODEL_PATH
 
     def test_default_thresholds(self):
         det = AsyncDetector(MODEL_PATH)
-        assert det._conf_threshold == 0.25
-        assert det._iou_threshold == 0.45
+        assert det.conf_threshold == 0.25
+        assert det.iou_threshold == 0.45
 
     def test_vehicles_only_default_false(self):
         det = AsyncDetector(MODEL_PATH)
-        assert det._vehicles_only is False
+        assert det.vehicles_only is False
 
 
 class TestAsyncDetectorBeforeStart:
@@ -44,7 +44,7 @@ class TestAsyncDetectorContextManager:
         det = AsyncDetector(MODEL_PATH)
         with det:
             pass
-        assert det._stop_event.is_set()
+        assert det.stop_event.is_set()
 
 
 class TestAsyncDetectorInference:
