@@ -25,19 +25,20 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.python.bootstrap.stream_discovery import probe_stream
-from src.python.core.background import BackgroundModel
+from src.python.core.stabilizer import BackgroundModel
 from src.python.core.stream import FrameGrabber, StreamError
 from src.python.perception.detector import YoloDetector
+from src.python.perception.tracker import Tracker
 
 WINDOW_NAME = "StreetScope - Detection"
-DEFAULT_MODEL_PATH = "models/yolov8n.onnx"
+DEFAULT_MODEL_PATH = "models/yolo11s.onnx"
 
-_shutdown_requested = False
+shutdown_requested = False
 
 
-def _signal_handler(signum, frame):
-    global _shutdown_requested
-    _shutdown_requested = True
+def signal_handler(signum, frame):
+    global shutdown_requested
+    shutdown_requested = True
 
 
 # Colors per class for visual distinction
@@ -51,22 +52,32 @@ CLASS_COLORS = {
 DEFAULT_COLOR = (0, 200, 0)
 
 
-def draw_detections(frame: np.ndarray, detections, infer_ms: float) -> np.ndarray:
-    """Draw bounding boxes, labels, and inference time on frame."""
+def draw_tracked(frame: np.ndarray, tracked_objects, infer_ms: float) -> np.ndarray:
+    """Draw bounding boxes, track IDs, labels, trails, and inference time on frame."""
     display = frame.copy()
 
-    for det in detections:
-        x1, y1, x2, y2 = det.bbox
-        color = CLASS_COLORS.get(det.class_name, DEFAULT_COLOR)
+    for obj in tracked_objects:
+        x1, y1, x2, y2 = obj.bbox
+        color = CLASS_COLORS.get(obj.class_name, DEFAULT_COLOR)
         cv2.rectangle(display, (x1, y1), (x2, y2), color, 2)
 
-        label = f"{det.class_name} {det.confidence:.2f}"
+        label = f"#{obj.track_id} {obj.class_name} {obj.confidence:.2f}"
         (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.4, 1)
         cv2.rectangle(display, (x1, y1 - th - 4), (x1 + tw, y1), color, -1)
         cv2.putText(display, label, (x1, y1 - 2),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 0), 1, cv2.LINE_AA)
 
-    cv2.putText(display, f"YOLO: {infer_ms:.1f}ms  Det: {len(detections)}",
+        # Draw trajectory trail as fading polyline
+        if len(obj.trail) >= 2:
+            for j in range(1, len(obj.trail)):
+                alpha = j / len(obj.trail)
+                thickness = max(1, int(alpha * 2))
+                c = tuple(int(v * alpha) for v in color)
+                pt1 = (int(obj.trail[j - 1][0]), int(obj.trail[j - 1][1]))
+                pt2 = (int(obj.trail[j][0]), int(obj.trail[j][1]))
+                cv2.line(display, pt1, pt2, c, thickness, cv2.LINE_AA)
+
+    cv2.putText(display, f"YOLO: {infer_ms:.1f}ms  Tracks: {len(tracked_objects)}",
                 (5, display.shape[0] - 8), cv2.FONT_HERSHEY_SIMPLEX,
                 0.45, (0, 255, 0), 1, cv2.LINE_AA)
 
@@ -75,8 +86,8 @@ def draw_detections(frame: np.ndarray, detections, infer_ms: float) -> np.ndarra
 
 def run(url: str, model_path: str, vehicles_only: bool, conf: float,
         show_mask: bool, duration: int) -> None:
-    global _shutdown_requested
-    _shutdown_requested = False
+    global shutdown_requested
+    shutdown_requested = False
 
     print(f"Probing stream: {url}")
     profile = probe_stream(url)
@@ -103,6 +114,8 @@ def run(url: str, model_path: str, vehicles_only: bool, conf: float,
     detector.detect(dummy)
     print(f"Model: {model_path} (conf={conf}, warmed up)")
 
+    tracker = Tracker(frame_rate=int(profile.frame_rate))
+
     with FrameGrabber(url, realtime=True) as grabber:
         grabber.start()
 
@@ -110,7 +123,7 @@ def run(url: str, model_path: str, vehicles_only: bool, conf: float,
 
         try:
             while True:
-                if _shutdown_requested:
+                if shutdown_requested:
                     stop_reason = "signal"
                     break
 
@@ -137,8 +150,11 @@ def run(url: str, model_path: str, vehicles_only: bool, conf: float,
                         total_detections += len(dets)
                         frames_displayed += 1
 
-                        # Draw detections
-                        display = draw_detections(frame, dets, infer_ms)
+                        # Track detections
+                        tracked = tracker.update(dets)
+
+                        # Draw tracked objects
+                        display = draw_tracked(frame, tracked, infer_ms)
 
                         # Scale up for visibility
                         h, w = display.shape[:2]
@@ -215,8 +231,8 @@ def main():
                         help="Duration in seconds (0 = unlimited)")
     args = parser.parse_args()
 
-    signal.signal(signal.SIGINT, _signal_handler)
-    signal.signal(signal.SIGTERM, _signal_handler)
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
 
     try:
         run(args.url, args.model, args.vehicles_only, args.conf, args.show_mask, args.duration)

@@ -24,17 +24,17 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.python.bootstrap.stream_discovery import probe_stream
-from src.python.core.background import BackgroundModel
+from src.python.core.stabilizer import BackgroundModel
 from src.python.core.stream import FrameGrabber, StreamError, StreamMetrics
 
 WINDOW_NAME = "StreetScope - Background Viewer"
 
-_shutdown_requested = False
+shutdown_requested = False
 
 
-def _signal_handler(signum, frame):
-    global _shutdown_requested
-    _shutdown_requested = True
+def signal_handler(signum, frame):
+    global shutdown_requested
+    shutdown_requested = True
 
 
 def build_display(frame: np.ndarray, bg_model: BackgroundModel, mask: np.ndarray,
@@ -60,11 +60,12 @@ def build_display(frame: np.ndarray, bg_model: BackgroundModel, mask: np.ndarray
     display = cv2.resize(combined, (cw * scale, ch * scale),
                          interpolation=cv2.INTER_NEAREST)
 
-    # Labels
+    # Labels (top-right of each panel)
     panel_w = w * scale
     labels = ["Live", "Background", "Motion Mask"]
     for i, label in enumerate(labels):
-        x = i * panel_w + 5
+        (tw, _), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.45, 1)
+        x = (i + 1) * panel_w - tw - 5
         cv2.putText(display, label, (x, 15), cv2.FONT_HERSHEY_SIMPLEX,
                     0.45, (0, 255, 0), 1, cv2.LINE_AA)
 
@@ -85,8 +86,8 @@ def build_display(frame: np.ndarray, bg_model: BackgroundModel, mask: np.ndarray
 
 
 def run(url: str, alpha: float, threshold: int, warmup: int, duration: int) -> None:
-    global _shutdown_requested
-    _shutdown_requested = False
+    global shutdown_requested
+    shutdown_requested = False
 
     print(f"Probing stream: {url}")
     profile = probe_stream(url)
@@ -114,7 +115,7 @@ def run(url: str, alpha: float, threshold: int, warmup: int, duration: int) -> N
 
         try:
             while True:
-                if _shutdown_requested:
+                if shutdown_requested:
                     stop_reason = "signal"
                     break
 
@@ -193,14 +194,14 @@ def main():
 
     parser = argparse.ArgumentParser(description="Background plate and motion mask viewer")
     parser.add_argument("--url", required=True, help="HLS stream URL")
-    parser.add_argument("--alpha", type=float, default=0.02, help="EMA learning rate")
-    parser.add_argument("--threshold", type=int, default=30, help="Motion threshold (0-255)")
+    parser.add_argument("--alpha", type=float, default=0.05, help="EMA learning rate")
+    parser.add_argument("--threshold", type=int, default=15, help="Motion threshold (0-255)")
     parser.add_argument("--warmup", type=int, default=60, help="Warmup frames")
     parser.add_argument("--duration", type=int, default=0, help="Duration in seconds (0 = unlimited)")
     args = parser.parse_args()
 
-    signal.signal(signal.SIGINT, _signal_handler)
-    signal.signal(signal.SIGTERM, _signal_handler)
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
 
     try:
         run(args.url, args.alpha, args.threshold, args.warmup, args.duration)

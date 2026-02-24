@@ -11,7 +11,7 @@ from src.python.perception.detector import (
     preprocess,
 )
 
-MODEL_PATH = "models/yolov8n.onnx"
+MODEL_PATH = "models/yolo11s.onnx"
 
 
 class TestDetection:
@@ -76,7 +76,7 @@ class TestPreprocess:
 
 
 class TestPostprocess:
-    def _make_output(self, cx, cy, w, h, class_id, score):
+    def make_output(self, cx, cy, w, h, class_id, score):
         """Build a synthetic YOLOv8 output tensor with one detection."""
         # output shape: (1, 84, 8400) — 4 bbox + 80 class scores
         output = np.zeros((1, 84, 8400), dtype=np.float32)
@@ -89,7 +89,7 @@ class TestPostprocess:
 
     def test_single_detection(self):
         # Place a car (class 2) at center of 640x640
-        output = self._make_output(320, 320, 100, 80, class_id=2, score=0.9)
+        output = self.make_output(320, 320, 100, 80, class_id=2, score=0.9)
         dets = postprocess(output, conf_threshold=0.5, iou_threshold=0.5,
                            ratio=1.0, pad=(0, 0), orig_shape=(640, 640))
         assert len(dets) == 1
@@ -98,7 +98,7 @@ class TestPostprocess:
         assert dets[0].confidence >= 0.5
 
     def test_low_confidence_filtered(self):
-        output = self._make_output(320, 320, 100, 80, class_id=2, score=0.1)
+        output = self.make_output(320, 320, 100, 80, class_id=2, score=0.1)
         dets = postprocess(output, conf_threshold=0.5, iou_threshold=0.5,
                            ratio=1.0, pad=(0, 0), orig_shape=(640, 640))
         assert len(dets) == 0
@@ -113,7 +113,7 @@ class TestPostprocess:
         """Detections should be in original image coordinates, not 640x640."""
         # Simulating 320x240 input: ratio=2.0, pad=(0, 80)
         # Detection at (320, 320) in model space -> (160, 120) in original
-        output = self._make_output(320, 320, 100, 80, class_id=2, score=0.9)
+        output = self.make_output(320, 320, 100, 80, class_id=2, score=0.9)
         dets = postprocess(output, conf_threshold=0.5, iou_threshold=0.5,
                            ratio=2.0, pad=(0, 80), orig_shape=(240, 320))
         assert len(dets) == 1
@@ -126,7 +126,7 @@ class TestPostprocess:
     def test_bbox_clipped_to_image(self):
         """Bounding boxes should not extend beyond image boundaries."""
         # Detection near edge
-        output = self._make_output(10, 10, 100, 100, class_id=2, score=0.9)
+        output = self.make_output(10, 10, 100, 100, class_id=2, score=0.9)
         dets = postprocess(output, conf_threshold=0.5, iou_threshold=0.5,
                            ratio=1.0, pad=(0, 0), orig_shape=(640, 640))
         if len(dets) > 0:

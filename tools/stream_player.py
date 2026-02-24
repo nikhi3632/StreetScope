@@ -36,12 +36,12 @@ except ImportError:
 WINDOW_NAME = "StreetScope"
 
 # Signal flag for clean shutdown
-_shutdown_requested = False
+shutdown_requested = False
 
 
-def _signal_handler(signum, frame):
-    global _shutdown_requested
-    _shutdown_requested = True
+def signal_handler(signum, frame):
+    global shutdown_requested
+    shutdown_requested = True
 
 
 def draw_metrics_overlay(frame: np.ndarray, fm, sm: StreamMetrics, mem_mb: float) -> np.ndarray:
@@ -92,8 +92,8 @@ def print_summary(sm: StreamMetrics) -> None:
 
 
 def run(url: str, duration: int = 0) -> None:
-    global _shutdown_requested
-    _shutdown_requested = False
+    global shutdown_requested
+    shutdown_requested = False
 
     print(f"Probing stream: {url}")
     profile = probe_stream(url)
@@ -112,7 +112,7 @@ def run(url: str, duration: int = 0) -> None:
 
     try:
         for frame, fm in decode_frames(url, realtime=True):
-            if _shutdown_requested:
+            if shutdown_requested:
                 stop_reason = "signal"
                 break
 
@@ -173,8 +173,8 @@ def main():
     args = parser.parse_args()
 
     # Install signal handlers for clean shutdown
-    signal.signal(signal.SIGINT, _signal_handler)
-    signal.signal(signal.SIGTERM, _signal_handler)
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
 
     try:
         run(args.url, args.duration)

@@ -173,7 +173,7 @@ class FrameGrabber:
 
     def start(self) -> None:
         """Start the decode thread."""
-        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread = threading.Thread(target=self.run, daemon=True)
         self._thread.start()
 
     def stop(self) -> None:
@@ -205,7 +205,7 @@ class FrameGrabber:
     def __exit__(self, *exc):
         self.stop()
 
-    def _run(self) -> None:
+    def run(self) -> None:
         """Decode loop — runs in a daemon thread."""
         try:
             for frame, fm in decode_frames(

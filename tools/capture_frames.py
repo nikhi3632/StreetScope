@@ -21,17 +21,17 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from src.python.bootstrap.stream_discovery import probe_stream
 from src.python.core.stream import StreamError, StreamMetrics, decode_frames
 
-_shutdown_requested = False
+shutdown_requested = False
 
 
-def _signal_handler(signum, frame):
-    global _shutdown_requested
-    _shutdown_requested = True
+def signal_handler(signum, frame):
+    global shutdown_requested
+    shutdown_requested = True
 
 
 def run(url: str, count: int, interval: int, output: str) -> None:
-    global _shutdown_requested
-    _shutdown_requested = False
+    global shutdown_requested
+    shutdown_requested = False
 
     os.makedirs(output, exist_ok=True)
 
@@ -66,7 +66,7 @@ def run(url: str, count: int, interval: int, output: str) -> None:
 
     try:
         for frame, fm in decode_frames(url):
-            if _shutdown_requested:
+            if shutdown_requested:
                 stop_reason = "interrupted"
                 break
 
@@ -115,8 +115,8 @@ def main():
     parser.add_argument("--output", default="data/frames", help="Output directory")
     args = parser.parse_args()
 
-    signal.signal(signal.SIGINT, _signal_handler)
-    signal.signal(signal.SIGTERM, _signal_handler)
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
 
     try:
         run(args.url, args.count, args.interval, args.output)

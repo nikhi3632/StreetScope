@@ -20,7 +20,7 @@ format:
 check: lint test
 
 # ── Tools (URL required) ────────────────────────────────
-URL ?= https://s52.nysdot.skyvdn.com/rtplive/R5_011/playlist.m3u8
+URL ?= https://s53.nysdot.skyvdn.com:443/rtplive/TA_028/playlist.m3u8
 
 play:
 	.venv/bin/python tools/stream_player.py --url "$(URL)"

@@ -182,7 +182,13 @@ class YoloDetector:
 
     def __init__(self, model_path: str, conf_threshold: float = 0.25,
                  iou_threshold: float = 0.45) -> None:
-        self._session = ort.InferenceSession(model_path)
+        opts = ort.SessionOptions()
+        opts.log_severity_level = 3  # ERROR only, suppress CoreML partition warnings
+        self._session = ort.InferenceSession(
+            model_path,
+            sess_options=opts,
+            providers=["CoreMLExecutionProvider"],
+        )
         self._input_name = self._session.get_inputs()[0].name
         inp_shape = self._session.get_inputs()[0].shape
         self.input_size: int = inp_shape[2]  # 640
@@ -242,7 +248,7 @@ class AsyncDetector:
 
     def start(self) -> None:
         """Start the inference thread. Loads the ONNX model."""
-        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread = threading.Thread(target=self.run, daemon=True)
         self._thread.start()
 
     def stop(self) -> None:
@@ -269,7 +275,7 @@ class AsyncDetector:
     def __exit__(self, *exc):
         self.stop()
 
-    def _run(self) -> None:
+    def run(self) -> None:
         """Inference loop — runs in a daemon thread."""
         detector = YoloDetector(
             self._model_path,

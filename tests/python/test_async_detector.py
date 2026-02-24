@@ -4,7 +4,7 @@ import numpy as np
 
 from src.python.perception.detector import AsyncDetector, Detection
 
-MODEL_PATH = "models/yolov8n.onnx"
+MODEL_PATH = "models/yolo11s.onnx"
 
 
 class TestAsyncDetectorConstruction:

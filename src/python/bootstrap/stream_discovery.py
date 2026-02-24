@@ -29,7 +29,7 @@ class StreamProfile:
         return self.width * self.height
 
 
-def _parse_frame_rate(rate_str: str) -> float | None:
+def parse_frame_rate(rate_str: str) -> float | None:
     """Parse ffprobe frame rate string like '15/1' or '30000/1001'."""
     if not rate_str or rate_str == "0/0":
         return None
@@ -42,7 +42,7 @@ def _parse_frame_rate(rate_str: str) -> float | None:
     return float(rate_str)
 
 
-def _extract_bitrate(ffprobe_data: dict, video_stream: dict) -> int:
+def extract_bitrate(ffprobe_data: dict, video_stream: dict) -> int:
     """Extract bitrate in kbps from ffprobe output, checking multiple locations."""
     # Check video stream tags for variant_bitrate
     tags = video_stream.get("tags", {})
@@ -75,9 +75,9 @@ def parse_ffprobe_output(ffprobe_data: dict) -> StreamProfile:
         raise ValueError("No video stream found in ffprobe output")
 
     # Frame rate: prefer r_frame_rate, fall back to avg_frame_rate
-    frame_rate = _parse_frame_rate(video_stream.get("r_frame_rate", ""))
+    frame_rate = parse_frame_rate(video_stream.get("r_frame_rate", ""))
     if frame_rate is None:
-        frame_rate = _parse_frame_rate(video_stream.get("avg_frame_rate", ""))
+        frame_rate = parse_frame_rate(video_stream.get("avg_frame_rate", ""))
     if frame_rate is None:
         raise ValueError("Could not determine frame rate from ffprobe output")
 
@@ -96,7 +96,7 @@ def parse_ffprobe_output(ffprobe_data: dict) -> StreamProfile:
         frame_rate=frame_rate,
         codec=video_stream["codec_name"],
         pixel_format=video_stream.get("pix_fmt", "unknown"),
-        bitrate_kbps=_extract_bitrate(ffprobe_data, video_stream),
+        bitrate_kbps=extract_bitrate(ffprobe_data, video_stream),
         color_matrix=video_stream.get("color_space", "unknown"),
         is_live=is_live,
     )

@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Export YOLOv8n .pt weights to ONNX format.
+"""Export YOLO11 .pt weights to ONNX format.
 
 Requires: pip install ultralytics
 
 Usage:
-    python tools/export_onnx.py
-    python tools/export_onnx.py --input models/yolov8n.pt --output models/yolov8n.onnx
+    python tools/export_pt2onnx.py
+    python tools/export_pt2onnx.py --input models/yolo11s.pt --output models/yolo11s.onnx
 """
 
 import argparse
@@ -43,9 +43,9 @@ def export(input_path: str, output_path: str) -> None:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Export YOLOv8n to ONNX")
-    parser.add_argument("--input", default="models/yolov8n.pt", help="Path to .pt weights")
-    parser.add_argument("--output", default="models/yolov8n.onnx", help="Output ONNX path")
+    parser = argparse.ArgumentParser(description="Export YOLO11s to ONNX")
+    parser.add_argument("--input", default="models/yolo11s.pt", help="Path to .pt weights")
+    parser.add_argument("--output", default="models/yolo11s.onnx", help="Output ONNX path")
     args = parser.parse_args()
     export(args.input, args.output)
 

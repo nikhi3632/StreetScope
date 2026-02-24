@@ -1,14 +1,14 @@
 import numpy as np
 import pytest
 
-from src.python.core.background import BackgroundModel
+from src.python.core.stabilizer import BackgroundModel
 
 
 class TestConstruction:
     def test_default_params(self):
         model = BackgroundModel()
-        assert model.alpha == pytest.approx(0.02)
-        assert model.threshold == 30
+        assert model.alpha == pytest.approx(0.05)
+        assert model.threshold == 15
         assert model.warmup_frames == 60
 
     def test_custom_params(self):

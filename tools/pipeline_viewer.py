@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Combined pipeline viewer: detection + background + motion mask.
+"""Combined pipeline viewer: stabilization + background + detection + LK tracking.
 
-Displays three panels side-by-side:
-  1. Live frame with YOLO detection boxes, class labels, confidence
-  2. Background plate
-  3. Motion mask
+Displays two panels side-by-side:
+  1. Original — raw camera frame (unprocessed)
+  2. Combined — stabilized frame with tracked objects, bounding boxes, and trails
 
-Bottom bar shows FPS, inference latency, warmup %, motion %, detection count.
+The full pipeline runs behind the scenes: stabilize -> background model ->
+YOLO detect -> motion filter -> LK track. Bottom bar shows metrics.
 
 Usage:
     python tools/pipeline_viewer.py --url URL
@@ -28,19 +28,22 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.python.bootstrap.stream_discovery import probe_stream
-from src.python.core.background import BackgroundModel
+from src.python.core.stabilizer import BackgroundModel, FrameStabilizer
 from src.python.core.stream import FrameGrabber, StreamError, StreamMetrics
 from src.python.perception.detector import YoloDetector
+from src.python.perception.tracker import Tracker
 
 WINDOW_NAME = "StreetScope - Pipeline"
-DEFAULT_MODEL_PATH = "models/yolov8n.onnx"
+DEFAULT_MODEL_PATH = "models/yolo11s.onnx"
 
-_shutdown_requested = False
+shutdown_requested = False
 
 
-def _signal_handler(signum, frame):
-    global _shutdown_requested
-    _shutdown_requested = True
+def signal_handler(signum, frame):
+    global shutdown_requested
+    logging.getLogger(__name__).debug("Signal %d at line %s", signum,
+                                     frame.f_lineno if frame else "?")
+    shutdown_requested = True
 
 
 CLASS_COLORS = {
@@ -53,13 +56,38 @@ CLASS_COLORS = {
 DEFAULT_COLOR = (0, 200, 0)
 
 
-def draw_detections(frame: np.ndarray, detections) -> np.ndarray:
-    display = frame.copy()
+def filter_by_motion(detections, mask: np.ndarray, min_overlap: float = 0.05):
+    """Keep only detections that overlap sufficiently with the motion mask.
+
+    A detection is considered moving if at least `min_overlap` fraction of
+    its bounding box pixels are non-zero in the motion mask. This filters
+    out stationary objects like parked cars.
+    """
+    moving = []
     for det in detections:
         x1, y1, x2, y2 = det.bbox
-        color = CLASS_COLORS.get(det.class_name, DEFAULT_COLOR)
+        h, w = mask.shape[:2]
+        x1c = max(0, min(x1, w))
+        y1c = max(0, min(y1, h))
+        x2c = max(0, min(x2, w))
+        y2c = max(0, min(y2, h))
+        area = (x2c - x1c) * (y2c - y1c)
+        if area <= 0:
+            continue
+        motion_pixels = np.count_nonzero(mask[y1c:y2c, x1c:x2c])
+        if motion_pixels / area >= min_overlap:
+            moving.append(det)
+    return moving
+
+
+def draw_combined(frame: np.ndarray, tracked_objects) -> np.ndarray:
+    """Draw tracked objects with bounding boxes and IDs."""
+    display = frame.copy()
+    for obj in tracked_objects:
+        x1, y1, x2, y2 = obj.bbox
+        color = CLASS_COLORS.get(obj.class_name, DEFAULT_COLOR)
         cv2.rectangle(display, (x1, y1), (x2, y2), color, 2)
-        label = f"{det.class_name} {det.confidence:.2f}"
+        label = f"#{obj.track_id} {obj.class_name} {obj.confidence:.2f}"
         (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.4, 1)
         cv2.rectangle(display, (x1, y1 - th - 4), (x1 + tw, y1), color, -1)
         cv2.putText(display, label, (x1, y1 - 2),
@@ -67,49 +95,38 @@ def draw_detections(frame: np.ndarray, detections) -> np.ndarray:
     return display
 
 
-def build_display(det_frame: np.ndarray, bg_model: BackgroundModel,
-                  mask: np.ndarray, dets, infer_ms: float,
-                  sm: StreamMetrics) -> np.ndarray:
-    h, w = det_frame.shape[:2]
+def build_display(original: np.ndarray, combined: np.ndarray,
+                  infer_ms: float, sm: StreamMetrics,
+                  num_tracks: int, num_dets: int,
+                  motion_pct: float) -> np.ndarray:
+    w = original.shape[1]
 
-    # Background panel
-    if bg_model.background is not None:
-        bg_panel = bg_model.background
-    else:
-        bg_panel = np.full_like(det_frame, 64)
+    # Two panels: Original | Combined
+    display = np.hstack([original, combined])
 
-    # Motion mask as BGR
-    mask_color = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
-
-    # Stack: detected frame | background | mask
-    combined = np.hstack([det_frame, bg_panel, mask_color])
-
-    # Scale to fit ~1280px wide (3 panels)
-    ch, cw = combined.shape[:2]
+    # Scale to fit ~1280px wide (2 panels)
+    dh, dw = display.shape[:2]
     target_w = 1280
-    scale = target_w / cw
-    display = cv2.resize(combined, (int(cw * scale), int(ch * scale)),
+    scale = target_w / dw
+    display = cv2.resize(display, (int(dw * scale), int(dh * scale)),
                          interpolation=cv2.INTER_LINEAR)
 
-    # Panel labels
+    # Panel labels (top-right of each panel)
     panel_w = int(w * scale)
-    labels = ["Detection", "Background", "Motion Mask"]
+    labels = ["Original", "Pipeline"]
     for i, label in enumerate(labels):
-        x = i * panel_w + 5
+        (tw, _), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.45, 1)
+        x = (i + 1) * panel_w - tw - 5
         cv2.putText(display, label, (x, 15), cv2.FONT_HERSHEY_SIMPLEX,
                     0.45, (0, 255, 0), 1, cv2.LINE_AA)
 
     # Metrics bar at bottom
-    dh = display.shape[0]
-    warmup_pct = min(100, bg_model.frame_count / bg_model.warmup_frames * 100)
-    motion_pct = np.count_nonzero(mask) / mask.size * 100 if mask.size > 0 else 0
-
+    out_h = display.shape[0]
     line = (f"FPS: {sm.effective_fps:.1f}  "
             f"YOLO: {infer_ms:.1f}ms  "
-            f"Det: {len(dets)}  "
-            f"Warmup: {warmup_pct:.0f}%  "
+            f"Det: {num_dets}  Tracks: {num_tracks}  "
             f"Motion: {motion_pct:.1f}%")
-    cv2.putText(display, line, (5, dh - 8),
+    cv2.putText(display, line, (5, out_h - 8),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 0), 1, cv2.LINE_AA)
 
     return display
@@ -117,15 +134,13 @@ def build_display(det_frame: np.ndarray, bg_model: BackgroundModel,
 
 def run(url: str, model_path: str, vehicles_only: bool, conf: float,
         duration: int) -> None:
-    global _shutdown_requested
-    _shutdown_requested = False
+    global shutdown_requested
+    shutdown_requested = False
 
     print(f"Probing stream: {url}")
     profile = probe_stream(url)
     print(f"  {profile.width}x{profile.height} @ {profile.frame_rate} fps")
     print()
-
-    bg_model = BackgroundModel()
 
     try:
         import psutil
@@ -140,14 +155,28 @@ def run(url: str, model_path: str, vehicles_only: bool, conf: float,
     stop_reason = "unknown"
     total_detections = 0
     infer_times: list[float] = []
-    motion_pcts: list[float] = []
     frames_displayed = 0
 
+    # Tracking quality metrics
+    all_confidences: list[float] = []
+    track_first_seen: dict[int, float] = {}
+    track_last_seen: dict[int, float] = {}
+    prev_track_ids: set[int] = set()
+    continuity_scores: list[float] = []
+
+    stabilizer = FrameStabilizer()
+    bg_model = BackgroundModel()
     detector = YoloDetector(model_path, conf_threshold=conf)
     # Warmup: first ONNX Runtime inference triggers JIT compilation
     dummy = np.zeros((profile.height, profile.width, 3), dtype=np.uint8)
     detector.detect(dummy)
+    tracker = Tracker(frame_rate=int(profile.frame_rate))
+    total_tracks = 0
+
     print(f"Model: {model_path} (conf={conf}, warmed up)")
+    print("Stabilizer: FrameStabilizer (sparse LK, 4-DOF affine)")
+    print("Background: EMA model (motion mask filters stationary detections)")
+    print("Tracker: LK hybrid (IC Affine + template correction + appearance basis)")
     print("Quit: 'q'/Escape in window | close window | Ctrl+C")
     print()
 
@@ -158,7 +187,7 @@ def run(url: str, model_path: str, vehicles_only: bool, conf: float,
 
         try:
             while True:
-                if _shutdown_requested:
+                if shutdown_requested:
                     stop_reason = "signal"
                     break
 
@@ -176,22 +205,54 @@ def run(url: str, model_path: str, vehicles_only: bool, conf: float,
                     if fm.frame_number != last_frame_num:
                         last_frame_num = fm.frame_number
 
-                        # Background + motion mask (< 1ms)
-                        mask = bg_model.update(frame)
-                        motion_pcts.append(np.count_nonzero(mask) / mask.size * 100)
+                        # Stabilize frame (cancel camera shake)
+                        stabilized, _ = stabilizer.stabilize(frame)
 
-                        # Synchronous detection (accurate boxes on this exact frame)
+                        # Background model on stabilized frame
+                        mask = bg_model.update(stabilized)
+                        motion_pct = np.count_nonzero(mask) / mask.size * 100 if mask.size > 0 else 0
+
+                        # Synchronous detection on stabilized frame
                         t0 = time.monotonic()
-                        dets = detector.detect(frame, vehicles_only=vehicles_only)
+                        raw_dets = detector.detect(stabilized, vehicles_only=vehicles_only)
                         infer_ms = (time.monotonic() - t0) * 1000
                         infer_times.append(infer_ms)
-                        total_detections += len(dets)
                         frames_displayed += 1
 
-                        # Compose and display
-                        det_frame = draw_detections(frame, dets)
+                        # Filter out stationary detections using motion mask
+                        if bg_model.is_warmed_up:
+                            dets = filter_by_motion(raw_dets, mask)
+                        else:
+                            dets = raw_dets  # Pass all during warmup
+                        total_detections += len(dets)
+
+                        # LK tracking on stabilized frame
+                        tracked = tracker.update(stabilized, dets)
+                        total_tracks = max(total_tracks, max((t.track_id for t in tracked), default=0))
+
+                        # Collect quality metrics
+                        now = time.monotonic()
+                        current_ids = {t.track_id for t in tracked}
+                        for t in tracked:
+                            all_confidences.append(t.confidence)
+                            if t.track_id not in track_first_seen:
+                                track_first_seen[t.track_id] = now
+                            track_last_seen[t.track_id] = now
+                        if prev_track_ids and current_ids:
+                            persisted = len(prev_track_ids & current_ids)
+                            continuity_scores.append(persisted / len(prev_track_ids))
+                        prev_track_ids = current_ids
+
+                        # Panel 1: raw original frame
+                        # Panel 2: stabilized + tracked objects
+                        combined_frame = draw_combined(stabilized, tracked)
                         sm = grabber.metrics
-                        display = build_display(det_frame, bg_model, mask, dets, infer_ms, sm)
+                        display = build_display(
+                            frame, combined_frame,
+                            infer_ms, sm,
+                            num_tracks=len(tracked), num_dets=len(dets),
+                            motion_pct=motion_pct,
+                        )
                         cv2.imshow(WINDOW_NAME, display)
 
                 key = cv2.waitKey(1) & 0xFF
@@ -249,12 +310,25 @@ def run(url: str, model_path: str, vehicles_only: bool, conf: float,
             print(f"    YOLO latency:      {sum(infer_times) / len(infer_times):.1f} ms avg"
                   f"  ({min(infer_times):.1f} / {max(infer_times):.1f} min/max)")
         print()
-        print("  Background:")
-        print(f"    Warmed up:         {bg_model.is_warmed_up}")
-        print(f"    Frames ingested:   {bg_model.frame_count}")
-        if motion_pcts:
-            print(f"    Motion:            {sum(motion_pcts) / len(motion_pcts):.1f}% avg"
-                  f"  ({min(motion_pcts):.1f} / {max(motion_pcts):.1f} min/max)")
+        print("  Tracking:")
+        print(f"    Unique tracks:     {total_tracks}")
+        if track_first_seen:
+            durations = [track_last_seen[tid] - track_first_seen[tid]
+                         for tid in track_first_seen]
+            avg_dur = sum(durations) / len(durations)
+            long_tracks = sum(1 for d in durations if d >= 1.0)
+            print(f"    Avg track duration: {avg_dur:.1f}s")
+            print(f"    Tracks > 1s:       {long_tracks}/{len(durations)}"
+                  f" ({long_tracks * 100 // len(durations)}%)")
+        if continuity_scores:
+            avg_cont = sum(continuity_scores) / len(continuity_scores)
+            print(f"    Frame continuity:  {avg_cont:.0%}")
+        if all_confidences:
+            sorted_conf = sorted(all_confidences)
+            avg_conf = sum(sorted_conf) / len(sorted_conf)
+            median_conf = sorted_conf[len(sorted_conf) // 2]
+            print(f"    Avg confidence:    {avg_conf:.2f}")
+            print(f"    Median confidence: {median_conf:.2f}")
         print()
         print("  System:")
         print(f"    Memory:            {mem_mb:.0f} MB")
@@ -273,14 +347,14 @@ def main():
                         help=f"ONNX model path (default: {DEFAULT_MODEL_PATH})")
     parser.add_argument("--vehicles-only", action="store_true",
                         help="Only show vehicle detections")
-    parser.add_argument("--conf", type=float, default=0.25,
-                        help="Confidence threshold (default: 0.25)")
+    parser.add_argument("--conf", type=float, default=0.20,
+                        help="Confidence threshold (default: 0.20)")
     parser.add_argument("--duration", type=int, default=0,
                         help="Duration in seconds (0 = unlimited)")
     args = parser.parse_args()
 
-    signal.signal(signal.SIGINT, _signal_handler)
-    signal.signal(signal.SIGTERM, _signal_handler)
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
 
     try:
         run(args.url, args.model, args.vehicles_only, args.conf, args.duration)
