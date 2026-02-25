@@ -31,7 +31,7 @@ from src.python.perception.detector import YoloDetector
 from src.python.perception.tracker import Tracker
 
 WINDOW_NAME = "StreetScope - Detection"
-DEFAULT_MODEL_PATH = "models/yolo11s.onnx"
+DEFAULT_MODEL_PATH = "models/yolo11s.mlpackage"
 
 shutdown_requested = False
 
@@ -64,8 +64,9 @@ def draw_tracked(frame: np.ndarray, tracked_objects, infer_ms: float) -> np.ndar
         label = f"#{obj.track_id} {obj.class_name} {obj.confidence:.2f}"
         (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.4, 1)
         cv2.rectangle(display, (x1, y1 - th - 4), (x1 + tw, y1), color, -1)
-        cv2.putText(display, label, (x1, y1 - 2),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 0), 1, cv2.LINE_AA)
+        cv2.putText(
+            display, label, (x1, y1 - 2), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 0), 1, cv2.LINE_AA
+        )
 
         # Draw trajectory trail as fading polyline
         if len(obj.trail) >= 2:
@@ -77,15 +78,23 @@ def draw_tracked(frame: np.ndarray, tracked_objects, infer_ms: float) -> np.ndar
                 pt2 = (int(obj.trail[j][0]), int(obj.trail[j][1]))
                 cv2.line(display, pt1, pt2, c, thickness, cv2.LINE_AA)
 
-    cv2.putText(display, f"YOLO: {infer_ms:.1f}ms  Tracks: {len(tracked_objects)}",
-                (5, display.shape[0] - 8), cv2.FONT_HERSHEY_SIMPLEX,
-                0.45, (0, 255, 0), 1, cv2.LINE_AA)
+    cv2.putText(
+        display,
+        f"YOLO: {infer_ms:.1f}ms  Tracks: {len(tracked_objects)}",
+        (5, display.shape[0] - 8),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.45,
+        (0, 255, 0),
+        1,
+        cv2.LINE_AA,
+    )
 
     return display
 
 
-def run(url: str, model_path: str, vehicles_only: bool, conf: float,
-        show_mask: bool, duration: int) -> None:
+def run(
+    url: str, model_path: str, vehicles_only: bool, conf: float, show_mask: bool, duration: int
+) -> None:
     global shutdown_requested
     shutdown_requested = False
 
@@ -159,14 +168,16 @@ def run(url: str, model_path: str, vehicles_only: bool, conf: float,
                         # Scale up for visibility
                         h, w = display.shape[:2]
                         scale = max(2, 640 // w)
-                        display = cv2.resize(display, (w * scale, h * scale),
-                                             interpolation=cv2.INTER_NEAREST)
+                        display = cv2.resize(
+                            display, (w * scale, h * scale), interpolation=cv2.INTER_NEAREST
+                        )
 
                         # Optional: side-by-side with motion mask
                         if bg_model is not None:
                             mask_color = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
-                            mask_display = cv2.resize(mask_color, (w * scale, h * scale),
-                                                      interpolation=cv2.INTER_NEAREST)
+                            mask_display = cv2.resize(
+                                mask_color, (w * scale, h * scale), interpolation=cv2.INTER_NEAREST
+                            )
                             display = np.hstack([display, mask_display])
 
                         cv2.imshow(WINDOW_NAME, display)
@@ -219,16 +230,23 @@ def main():
 
     parser = argparse.ArgumentParser(description="Live YOLO detection viewer")
     parser.add_argument("--url", required=True, help="HLS stream URL")
-    parser.add_argument("--model", default=DEFAULT_MODEL_PATH,
-                        help=f"ONNX model path (default: {DEFAULT_MODEL_PATH})")
-    parser.add_argument("--vehicles-only", action="store_true",
-                        help="Only show vehicle detections")
-    parser.add_argument("--conf", type=float, default=0.25,
-                        help="Confidence threshold (default: 0.25)")
-    parser.add_argument("--show-mask", action="store_true",
-                        help="Show motion mask side-by-side for cross-validation")
-    parser.add_argument("--duration", type=int, default=0,
-                        help="Duration in seconds (0 = unlimited)")
+    parser.add_argument(
+        "--model",
+        default=DEFAULT_MODEL_PATH,
+        help=f"Core ML model path (default: {DEFAULT_MODEL_PATH})",
+    )
+    parser.add_argument("--vehicles-only", action="store_true", help="Only show vehicle detections")
+    parser.add_argument(
+        "--conf", type=float, default=0.25, help="Confidence threshold (default: 0.25)"
+    )
+    parser.add_argument(
+        "--show-mask",
+        action="store_true",
+        help="Show motion mask side-by-side for cross-validation",
+    )
+    parser.add_argument(
+        "--duration", type=int, default=0, help="Duration in seconds (0 = unlimited)"
+    )
     args = parser.parse_args()
 
     signal.signal(signal.SIGINT, signal_handler)

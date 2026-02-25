@@ -1,0 +1,27 @@
+# clang-tidy configuration
+# Run: make tidy (requires build/ with compile_commands.json)
+#
+# Focused on catching real bugs and performance issues.
+# Style/naming checks are intentionally excluded — ruff handles Python,
+# and C++ style is enforced by -Wall -Wextra -Wpedantic.
+
+Checks: >
+  -*,
+  bugprone-*,
+  performance-*,
+  modernize-use-override,
+  modernize-use-nullptr,
+  modernize-use-auto,
+  readability-container-size-empty,
+  readability-redundant-smartptr-get,
+  misc-unused-using-decls,
+  misc-redundant-expression,
+
+# Don't flag header-not-self-contained for NEON intrinsics
+HeaderFilterRegex: 'include/streetscope/.*\.h$'
+
+CheckOptions:
+  - key: bugprone-argument-comment.StrictMode
+    value: false
+  - key: performance-unnecessary-value-param.AllowedTypes
+    value: 'AccumulatorConfig;SubtractorConfig;array_t'

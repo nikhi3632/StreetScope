@@ -10,7 +10,7 @@ SAMPLE_FFPROBE_OUTPUT = {
             "index": 0,
             "codec_name": "timed_id3",
             "codec_type": "data",
-            "tags": {"variant_bitrate": "231365"}
+            "tags": {"variant_bitrate": "231365"},
         },
         {
             "index": 1,
@@ -23,47 +23,63 @@ SAMPLE_FFPROBE_OUTPUT = {
             "r_frame_rate": "15/1",
             "avg_frame_rate": "15/1",
             "color_space": "bt709",
-            "tags": {"variant_bitrate": "231365"}
-        }
+            "tags": {"variant_bitrate": "231365"},
+        },
     ],
-    "format": {
-        "format_name": "hls",
-        "duration": "0",
-        "probe_score": 100
-    }
+    "format": {"format_name": "hls", "duration": "0", "probe_score": 100},
 }
 
 
 class TestStreamProfile:
     def test_frame_budget_at_15fps(self):
         profile = StreamProfile(
-            width=320, height=240, frame_rate=15.0,
-            codec="h264", pixel_format="yuv420p",
-            bitrate_kbps=231, color_matrix="bt709", is_live=True
+            width=320,
+            height=240,
+            frame_rate=15.0,
+            codec="h264",
+            pixel_format="yuv420p",
+            bitrate_kbps=231,
+            color_matrix="bt709",
+            is_live=True,
         )
         assert profile.frame_budget_ms == pytest.approx(66.67, abs=0.01)
 
     def test_frame_budget_at_30fps(self):
         profile = StreamProfile(
-            width=640, height=480, frame_rate=30.0,
-            codec="h264", pixel_format="yuv420p",
-            bitrate_kbps=500, color_matrix="bt709", is_live=True
+            width=640,
+            height=480,
+            frame_rate=30.0,
+            codec="h264",
+            pixel_format="yuv420p",
+            bitrate_kbps=500,
+            color_matrix="bt709",
+            is_live=True,
         )
         assert profile.frame_budget_ms == pytest.approx(33.33, abs=0.01)
 
     def test_resolution_tuple(self):
         profile = StreamProfile(
-            width=352, height=240, frame_rate=15.0,
-            codec="h264", pixel_format="yuv420p",
-            bitrate_kbps=175, color_matrix="smpte170m", is_live=True
+            width=352,
+            height=240,
+            frame_rate=15.0,
+            codec="h264",
+            pixel_format="yuv420p",
+            bitrate_kbps=175,
+            color_matrix="smpte170m",
+            is_live=True,
         )
         assert profile.resolution == (352, 240)
 
     def test_total_pixels(self):
         profile = StreamProfile(
-            width=320, height=240, frame_rate=15.0,
-            codec="h264", pixel_format="yuv420p",
-            bitrate_kbps=231, color_matrix="bt709", is_live=True
+            width=320,
+            height=240,
+            frame_rate=15.0,
+            codec="h264",
+            pixel_format="yuv420p",
+            bitrate_kbps=231,
+            color_matrix="bt709",
+            is_live=True,
         )
         assert profile.total_pixels == 76800
 
@@ -95,7 +111,7 @@ class TestParseFFprobeOutput:
     def test_raises_on_no_video_stream(self):
         data = {
             "streams": [{"codec_type": "audio", "codec_name": "aac"}],
-            "format": {"format_name": "hls"}
+            "format": {"format_name": "hls"},
         }
         with pytest.raises(ValueError, match="No video stream"):
             parse_ffprobe_output(data)

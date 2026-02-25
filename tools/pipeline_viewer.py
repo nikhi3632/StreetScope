@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
-"""Combined pipeline viewer: stabilization + background + detection + LK tracking.
+"""Combined pipeline viewer: stabilization + background + ISP + detection + LK tracking.
 
 Displays two panels side-by-side:
   1. Original — raw camera frame (unprocessed)
-  2. Combined — stabilized frame with tracked objects, bounding boxes, and trails
+  2. Combined — ISP-corrected stabilized frame with tracked objects and trails
 
-The full pipeline runs behind the scenes: stabilize -> background model ->
-YOLO detect -> motion filter -> LK track. Bottom bar shows metrics.
+The full pipeline: stabilize -> background model -> ISP (AE+AWB+AF) ->
+YOLO detect -> motion filter -> LK track. ISP corrections are computed once
+after background warmup and applied to the display path only. Detection and
+tracking run on the raw stabilized frame (perception path).
 
 Usage:
     python tools/pipeline_viewer.py --url URL
@@ -30,19 +32,30 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from src.python.bootstrap.stream_discovery import probe_stream
 from src.python.core.stabilizer import BackgroundModel, FrameStabilizer
 from src.python.core.stream import FrameGrabber, StreamError, StreamMetrics
+from src.python.isp.estimator import ISPEstimator, ISPParams
 from src.python.perception.detector import YoloDetector
 from src.python.perception.tracker import Tracker
 
+# Try to import SIMD module for accelerated ISP
+_simd_module = None
+try:
+    import streetscope_simd
+
+    _simd_module = streetscope_simd
+except ImportError:
+    pass
+
 WINDOW_NAME = "StreetScope - Pipeline"
-DEFAULT_MODEL_PATH = "models/yolo11s.onnx"
+DEFAULT_MODEL_PATH = "models/yolo11s.mlpackage"
 
 shutdown_requested = False
 
 
 def signal_handler(signum, frame):
     global shutdown_requested
-    logging.getLogger(__name__).debug("Signal %d at line %s", signum,
-                                     frame.f_lineno if frame else "?")
+    logging.getLogger(__name__).debug(
+        "Signal %d at line %s", signum, frame.f_lineno if frame else "?"
+    )
     shutdown_requested = True
 
 
@@ -90,15 +103,22 @@ def draw_combined(frame: np.ndarray, tracked_objects) -> np.ndarray:
         label = f"#{obj.track_id} {obj.class_name} {obj.confidence:.2f}"
         (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.4, 1)
         cv2.rectangle(display, (x1, y1 - th - 4), (x1 + tw, y1), color, -1)
-        cv2.putText(display, label, (x1, y1 - 2),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 0), 1, cv2.LINE_AA)
+        cv2.putText(
+            display, label, (x1, y1 - 2), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 0), 1, cv2.LINE_AA
+        )
     return display
 
 
-def build_display(original: np.ndarray, combined: np.ndarray,
-                  infer_ms: float, sm: StreamMetrics,
-                  num_tracks: int, num_dets: int,
-                  motion_pct: float) -> np.ndarray:
+def build_display(
+    original: np.ndarray,
+    combined: np.ndarray,
+    infer_ms: float,
+    sm: StreamMetrics,
+    num_tracks: int,
+    num_dets: int,
+    motion_pct: float,
+    isp_active: bool = False,
+) -> np.ndarray:
     w = original.shape[1]
 
     # Two panels: Original | Combined
@@ -108,8 +128,9 @@ def build_display(original: np.ndarray, combined: np.ndarray,
     dh, dw = display.shape[:2]
     target_w = 1280
     scale = target_w / dw
-    display = cv2.resize(display, (int(dw * scale), int(dh * scale)),
-                         interpolation=cv2.INTER_LINEAR)
+    display = cv2.resize(
+        display, (int(dw * scale), int(dh * scale)), interpolation=cv2.INTER_LINEAR
+    )
 
     # Panel labels (top-right of each panel)
     panel_w = int(w * scale)
@@ -117,23 +138,27 @@ def build_display(original: np.ndarray, combined: np.ndarray,
     for i, label in enumerate(labels):
         (tw, _), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.45, 1)
         x = (i + 1) * panel_w - tw - 5
-        cv2.putText(display, label, (x, 15), cv2.FONT_HERSHEY_SIMPLEX,
-                    0.45, (0, 255, 0), 1, cv2.LINE_AA)
+        cv2.putText(
+            display, label, (x, 15), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 0), 1, cv2.LINE_AA
+        )
 
     # Metrics bar at bottom
     out_h = display.shape[0]
-    line = (f"FPS: {sm.effective_fps:.1f}  "
-            f"YOLO: {infer_ms:.1f}ms  "
-            f"Det: {num_dets}  Tracks: {num_tracks}  "
-            f"Motion: {motion_pct:.1f}%")
-    cv2.putText(display, line, (5, out_h - 8),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 0), 1, cv2.LINE_AA)
+    isp_tag = "ISP: on" if isp_active else "ISP: warmup"
+    line = (
+        f"FPS: {sm.effective_fps:.1f}  "
+        f"YOLO: {infer_ms:.1f}ms  "
+        f"Det: {num_dets}  Tracks: {num_tracks}  "
+        f"Motion: {motion_pct:.1f}%  {isp_tag}"
+    )
+    cv2.putText(
+        display, line, (5, out_h - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 0), 1, cv2.LINE_AA
+    )
 
     return display
 
 
-def run(url: str, model_path: str, vehicles_only: bool, conf: float,
-        duration: int) -> None:
+def run(url: str, model_path: str, vehicles_only: bool, conf: float, duration: int) -> None:
     global shutdown_requested
     shutdown_requested = False
 
@@ -144,6 +169,7 @@ def run(url: str, model_path: str, vehicles_only: bool, conf: float,
 
     try:
         import psutil
+
         process = psutil.Process(os.getpid())
         has_psutil = True
     except ImportError:
@@ -153,6 +179,7 @@ def run(url: str, model_path: str, vehicles_only: bool, conf: float,
 
     start_time = time.monotonic()
     stop_reason = "unknown"
+    total_raw_detections = 0
     total_detections = 0
     infer_times: list[float] = []
     frames_displayed = 0
@@ -167,10 +194,12 @@ def run(url: str, model_path: str, vehicles_only: bool, conf: float,
     stabilizer = FrameStabilizer()
     bg_model = BackgroundModel()
     detector = YoloDetector(model_path, conf_threshold=conf)
-    # Warmup: first ONNX Runtime inference triggers JIT compilation
+    # Warmup: first Core ML inference triggers compilation
     dummy = np.zeros((profile.height, profile.width, 3), dtype=np.uint8)
     detector.detect(dummy)
     tracker = Tracker(frame_rate=int(profile.frame_rate))
+    estimator = ISPEstimator()
+    isp_params: ISPParams | None = None
     total_tracks = 0
 
     print(f"Model: {model_path} (conf={conf}, warmed up)")
@@ -208,7 +237,9 @@ def run(url: str, model_path: str, vehicles_only: bool, conf: float,
 
                         # Background model on stabilized frame
                         mask = bg_model.update(stabilized)
-                        motion_pct = np.count_nonzero(mask) / mask.size * 100 if mask.size > 0 else 0
+                        motion_pct = (
+                            np.count_nonzero(mask) / mask.size * 100 if mask.size > 0 else 0
+                        )
 
                         # Synchronous detection on stabilized frame
                         t0 = time.monotonic()
@@ -217,7 +248,12 @@ def run(url: str, model_path: str, vehicles_only: bool, conf: float,
                         infer_times.append(infer_ms)
                         frames_displayed += 1
 
+                        # Compute ISP params once after warmup
+                        if isp_params is None and bg_model.is_warmed_up:
+                            isp_params = estimator.estimate(bg_model.background_plate)
+
                         # Filter out stationary detections using motion mask
+                        total_raw_detections += len(raw_dets)
                         if bg_model.is_warmed_up:
                             dets = filter_by_motion(raw_dets, mask)
                         else:
@@ -226,7 +262,9 @@ def run(url: str, model_path: str, vehicles_only: bool, conf: float,
 
                         # LK tracking on stabilized frame
                         tracked = tracker.update(stabilized, dets)
-                        total_tracks = max(total_tracks, max((t.track_id for t in tracked), default=0))
+                        total_tracks = max(
+                            total_tracks, max((t.track_id for t in tracked), default=0)
+                        )
 
                         # Collect quality metrics
                         now = time.monotonic()
@@ -242,14 +280,26 @@ def run(url: str, model_path: str, vehicles_only: bool, conf: float,
                         prev_track_ids = current_ids
 
                         # Panel 1: raw original frame
-                        # Panel 2: stabilized + tracked objects
-                        combined_frame = draw_combined(stabilized, tracked)
+                        # Panel 2: ISP-corrected stabilized + tracked objects
+                        display_frame = stabilized
+                        if isp_params is not None:
+                            if _simd_module is not None:
+                                display_frame = ISPEstimator.apply_simd(
+                                    stabilized, isp_params, _simd_module
+                                )
+                            else:
+                                display_frame = ISPEstimator.apply(stabilized, isp_params)
+                        combined_frame = draw_combined(display_frame, tracked)
                         sm = grabber.metrics
                         display = build_display(
-                            frame, combined_frame,
-                            infer_ms, sm,
-                            num_tracks=len(tracked), num_dets=len(dets),
+                            frame,
+                            combined_frame,
+                            infer_ms,
+                            sm,
+                            num_tracks=len(tracked),
+                            num_dets=len(dets),
                             motion_pct=motion_pct,
+                            isp_active=isp_params is not None,
                         )
                         cv2.imshow(WINDOW_NAME, display)
 
@@ -295,29 +345,41 @@ def run(url: str, model_path: str, vehicles_only: bool, conf: float,
         print(f"    Effective FPS:     {sm.effective_fps:.1f}")
         print(f"    Decode latency:    {sm.avg_decode_ms:.2f} ms avg")
         if sm.min_interval_ms != float("inf"):
-            print(f"    Frame interval:    {sm.avg_interval_ms:.1f} ms avg"
-                  f"  ({sm.min_interval_ms:.1f} / {sm.max_interval_ms:.1f} min/max)")
+            print(
+                f"    Frame interval:    {sm.avg_interval_ms:.1f} ms avg "
+                f" ({sm.min_interval_ms:.1f} / {sm.max_interval_ms:.1f} min/max)"
+            )
         if sm.dropped_frames > 0:
             print(f"    Dropped frames:    {sm.dropped_frames}")
         print()
         print("  Detection:")
-        print(f"    Total detections:  {total_detections}")
+        print(f"    Raw detections:    {total_raw_detections}")
+        print(f"    After motion filt: {total_detections}")
+        filtered = total_raw_detections - total_detections
+        if total_raw_detections > 0:
+            print(
+                f"    Filtered out:      {filtered}"
+                f" ({filtered * 100 // total_raw_detections}% stationary)"
+            )
         if frames_displayed > 0:
             print(f"    Avg per frame:     {total_detections / frames_displayed:.1f}")
         if infer_times:
-            print(f"    YOLO latency:      {sum(infer_times) / len(infer_times):.1f} ms avg"
-                  f"  ({min(infer_times):.1f} / {max(infer_times):.1f} min/max)")
+            print(
+                f"    YOLO latency:      {sum(infer_times) / len(infer_times):.1f} ms avg "
+                f" ({min(infer_times):.1f} / {max(infer_times):.1f} min/max)"
+            )
         print()
         print("  Tracking:")
         print(f"    Unique tracks:     {total_tracks}")
         if track_first_seen:
-            durations = [track_last_seen[tid] - track_first_seen[tid]
-                         for tid in track_first_seen]
+            durations = [track_last_seen[tid] - track_first_seen[tid] for tid in track_first_seen]
             avg_dur = sum(durations) / len(durations)
             long_tracks = sum(1 for d in durations if d >= 1.0)
             print(f"    Avg track duration: {avg_dur:.1f}s")
-            print(f"    Tracks > 1s:       {long_tracks}/{len(durations)}"
-                  f" ({long_tracks * 100 // len(durations)}%)")
+            print(
+                f"    Tracks > 1s:       {long_tracks}/{len(durations)}"
+                f" ({long_tracks * 100 // len(durations)}%)"
+            )
         if continuity_scores:
             avg_cont = sum(continuity_scores) / len(continuity_scores)
             print(f"    Frame continuity:  {avg_cont:.0%}")
@@ -327,6 +389,21 @@ def run(url: str, model_path: str, vehicles_only: bool, conf: float,
             median_conf = sorted_conf[len(sorted_conf) // 2]
             print(f"    Avg confidence:    {avg_conf:.2f}")
             print(f"    Median confidence: {median_conf:.2f}")
+        print()
+        print("  ISP 3A:")
+        if isp_params is not None:
+            lut = isp_params.auto_exposure_lut
+            gains = isp_params.auto_white_balance_gains
+            bmap = isp_params.blur_map
+            print("    Auto Exposure (tone mapping):")
+            print(f"      Gamma LUT range: {lut.min()}-{lut.max()}")
+            print("    Auto White Balance (color correction):")
+            print(f"      Gains [B,G,R]:   [{gains[0]:.3f}, {gains[1]:.3f}, {gains[2]:.3f}]")
+            print("    Auto Focus (sharpening):")
+            print(f"      Blur map range:  {bmap.min():.0f} / {bmap.max():.0f} min/max")
+            print(f"    SIMD accelerated:  {'yes' if _simd_module is not None else 'no'}")
+        else:
+            print("    Not computed (warmup incomplete)")
         print()
         print("  System:")
         print(f"    Memory:            {mem_mb:.0f} MB")
@@ -341,14 +418,18 @@ def main():
 
     parser = argparse.ArgumentParser(description="Combined pipeline viewer")
     parser.add_argument("--url", required=True, help="HLS stream URL")
-    parser.add_argument("--model", default=DEFAULT_MODEL_PATH,
-                        help=f"ONNX model path (default: {DEFAULT_MODEL_PATH})")
-    parser.add_argument("--vehicles-only", action="store_true",
-                        help="Only show vehicle detections")
-    parser.add_argument("--conf", type=float, default=0.20,
-                        help="Confidence threshold (default: 0.20)")
-    parser.add_argument("--duration", type=int, default=0,
-                        help="Duration in seconds (0 = unlimited)")
+    parser.add_argument(
+        "--model",
+        default=DEFAULT_MODEL_PATH,
+        help=f"Core ML model path (default: {DEFAULT_MODEL_PATH})",
+    )
+    parser.add_argument("--vehicles-only", action="store_true", help="Only show vehicle detections")
+    parser.add_argument(
+        "--conf", type=float, default=0.20, help="Confidence threshold (default: 0.20)"
+    )
+    parser.add_argument(
+        "--duration", type=int, default=0, help="Duration in seconds (0 = unlimited)"
+    )
     args = parser.parse_args()
 
     signal.signal(signal.SIGINT, signal_handler)

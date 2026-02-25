@@ -26,6 +26,7 @@ class StreamReadError(StreamError):
 @dataclass
 class FrameMetrics:
     """Per-frame timing and sequence metadata."""
+
     frame_number: int
     decode_latency_ms: float
     arrival_interval_ms: float
@@ -35,6 +36,7 @@ class FrameMetrics:
 @dataclass
 class StreamMetrics:
     """Accumulated stream-level metrics."""
+
     frames_decoded: int = 0
     total_decode_ms: float = 0.0
     min_interval_ms: float = float("inf")
@@ -116,8 +118,11 @@ def decode_frames(url: str, realtime: bool = False, max_consecutive_failures: in
                     raise StreamReadError(
                         f"Stream read failed {consecutive_failures} consecutive times"
                     )
-                logger.debug("Frame read failed (%d/%d), retrying",
-                             consecutive_failures, max_consecutive_failures)
+                logger.debug(
+                    "Frame read failed (%d/%d), retrying",
+                    consecutive_failures,
+                    max_consecutive_failures,
+                )
                 time.sleep(RETRY_SLEEP_S)
                 continue
 
@@ -157,8 +162,9 @@ class FrameGrabber:
     most recently decoded frame (or None if no frame yet).
     """
 
-    def __init__(self, url: str, max_consecutive_failures: int = 30,
-                 realtime: bool = False) -> None:
+    def __init__(
+        self, url: str, max_consecutive_failures: int = 30, realtime: bool = False
+    ) -> None:
         self.url = url
         self.max_consecutive_failures = max_consecutive_failures
         self.realtime = realtime

@@ -106,8 +106,10 @@ def probe_stream(url: str, timeout: float = 10.0) -> StreamProfile:
     """Probe an HLS stream URL and return its StreamProfile."""
     cmd = [
         "ffprobe",
-        "-v", "quiet",
-        "-print_format", "json",
+        "-v",
+        "quiet",
+        "-print_format",
+        "json",
         "-show_streams",
         "-show_format",
         url,

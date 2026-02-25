@@ -37,24 +37,30 @@ def run(url: str, count: int, interval: int, output: str) -> None:
 
     print(f"Probing stream: {url}")
     profile = probe_stream(url)
-    print(f"  {profile.width}x{profile.height} @ {profile.frame_rate} fps, "
-          f"{profile.codec}, {profile.bitrate_kbps} kbps")
+    print(
+        f"  {profile.width}x{profile.height} @ {profile.frame_rate} fps, "
+        f"{profile.codec}, {profile.bitrate_kbps} kbps"
+    )
     print(f"  Frame budget: {profile.frame_budget_ms:.1f} ms")
     print()
 
     profile_path = os.path.join(output, "stream_profile.json")
     with open(profile_path, "w") as f:
-        json.dump({
-            "url": url,
-            "width": profile.width,
-            "height": profile.height,
-            "frame_rate": profile.frame_rate,
-            "codec": profile.codec,
-            "pixel_format": profile.pixel_format,
-            "bitrate_kbps": profile.bitrate_kbps,
-            "color_matrix": profile.color_matrix,
-            "captured_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-        }, f, indent=2)
+        json.dump(
+            {
+                "url": url,
+                "width": profile.width,
+                "height": profile.height,
+                "frame_rate": profile.frame_rate,
+                "codec": profile.codec,
+                "pixel_format": profile.pixel_format,
+                "bitrate_kbps": profile.bitrate_kbps,
+                "color_matrix": profile.color_matrix,
+                "captured_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            },
+            f,
+            indent=2,
+        )
 
     saved = 0
     total_frames = 0
@@ -80,8 +86,10 @@ def run(url: str, count: int, interval: int, output: str) -> None:
                 saved += 1
 
                 if saved % 20 == 0:
-                    print(f"  Saved {saved}/{count} frames "
-                          f"(avg decode: {metrics.avg_decode_ms:.1f} ms)")
+                    print(
+                        f"  Saved {saved}/{count} frames "
+                        f"(avg decode: {metrics.avg_decode_ms:.1f} ms)"
+                    )
 
             if saved >= count:
                 break

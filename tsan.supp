@@ -1,0 +1,6 @@
+# Suppress data races inside third-party libraries.
+# These are upstream bugs, not in our code.
+
+# OpenCV internal threading (cv2.abi3.so)
+# https://github.com/opencv/opencv/issues
+race:cv2.abi3.so

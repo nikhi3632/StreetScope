@@ -83,7 +83,11 @@ class FrameStabilizer:
 
         # Track features into current frame
         pts_curr, status, _ = cv2.calcOpticalFlowPyrLK(
-            self.prev_gray, gray, pts_prev, None, **self.lk_params,
+            self.prev_gray,
+            gray,
+            pts_prev,
+            None,
+            **self.lk_params,
         )
 
         good = status.flatten() == 1
@@ -97,7 +101,8 @@ class FrameStabilizer:
         # Estimate 4-DOF affine (translation + rotation + uniform scale)
         # M maps previous-frame coords -> current-frame coords (camera motion)
         M, inliers = cv2.estimateAffinePartial2D(
-            pts_p, pts_c,
+            pts_p,
+            pts_c,
             method=cv2.RANSAC,
             ransacReprojThreshold=self.ransac_thresh,
         )
@@ -124,7 +129,10 @@ class FrameStabilizer:
         M_inv = M_inv_full[:2]
 
         stabilized = cv2.warpAffine(
-            frame, M_inv, (w, h), borderMode=cv2.BORDER_REPLICATE,
+            frame,
+            M_inv,
+            (w, h),
+            borderMode=cv2.BORDER_REPLICATE,
         )
 
         # Use the *original* (unstabilized) gray for next frame's features
@@ -145,6 +153,10 @@ class BackgroundModel:
 
     During warmup (first `warmup_frames` frames), a faster effective alpha
     accelerates convergence so the background is usable quickly.
+
+    When ``use_simd=True`` (default), EMA and subtraction are performed by
+    C++ NEON kernels via pybind11.  Falls back to OpenCV if the native
+    module is unavailable.
     """
 
     def __init__(
@@ -154,6 +166,7 @@ class BackgroundModel:
         warmup_frames: int = 60,
         warmup_alpha: float = 0.5,
         kernel_size: int = 5,
+        use_simd: bool = True,
     ) -> None:
         self.alpha = alpha
         self.threshold = threshold
@@ -163,6 +176,15 @@ class BackgroundModel:
         self.background_plate: np.ndarray | None = None
         self.frame_count: int = 0
         self.kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
+
+        self._simd = None
+        if use_simd:
+            try:
+                import streetscope_simd
+
+                self._simd = streetscope_simd
+            except ImportError:
+                pass
 
     @property
     def background(self) -> np.ndarray | None:
@@ -203,17 +225,20 @@ class BackgroundModel:
             h, w = frame.shape[:2]
             return np.zeros((h, w), dtype=np.uint8)
 
-        # EMA update: bg = (1 - alpha) * bg + alpha * frame
-        cv2.accumulateWeighted(frame_f, self.background_plate, alpha)
-        self.frame_count += 1
-
-        # Absolute diff on uint8 for thresholding
-        bg_uint8 = self.background_plate.astype(np.uint8)
-        diff = cv2.absdiff(frame, bg_uint8)
-        gray_diff = cv2.cvtColor(diff, cv2.COLOR_BGR2GRAY)
-
-        # Threshold to binary mask
-        _, mask = cv2.threshold(gray_diff, self.threshold, 255, cv2.THRESH_BINARY)
+        if self._simd is not None:
+            # NEON path: C++ SIMD kernels via pybind11
+            self._simd.accumulate_ema(frame_f, self.background_plate, alpha=alpha)
+            self.frame_count += 1
+            bg_uint8 = self.background_plate.astype(np.uint8)
+            mask = self._simd.subtract_background(frame, bg_uint8, threshold=self.threshold)
+        else:
+            # OpenCV path (golden reference)
+            cv2.accumulateWeighted(frame_f, self.background_plate, alpha)
+            self.frame_count += 1
+            bg_uint8 = self.background_plate.astype(np.uint8)
+            diff = cv2.absdiff(frame, bg_uint8)
+            gray_diff = cv2.cvtColor(diff, cv2.COLOR_BGR2GRAY)
+            _, mask = cv2.threshold(gray_diff, self.threshold, 255, cv2.THRESH_BINARY)
 
         # Morphological cleanup: open removes small noise, close fills small holes
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, self.kernel)

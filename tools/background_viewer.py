@@ -37,8 +37,9 @@ def signal_handler(signum, frame):
     shutdown_requested = True
 
 
-def build_display(frame: np.ndarray, bg_model: BackgroundModel, mask: np.ndarray,
-                  fm, sm: StreamMetrics) -> np.ndarray:
+def build_display(
+    frame: np.ndarray, bg_model: BackgroundModel, mask: np.ndarray, fm, sm: StreamMetrics
+) -> np.ndarray:
     """Compose three-panel display with metrics overlay."""
     h, w = frame.shape[:2]
 
@@ -57,8 +58,7 @@ def build_display(frame: np.ndarray, bg_model: BackgroundModel, mask: np.ndarray
     # Scale up for visibility
     ch, cw = combined.shape[:2]
     scale = max(1, 640 // w)
-    display = cv2.resize(combined, (cw * scale, ch * scale),
-                         interpolation=cv2.INTER_NEAREST)
+    display = cv2.resize(combined, (cw * scale, ch * scale), interpolation=cv2.INTER_NEAREST)
 
     # Labels (top-right of each panel)
     panel_w = w * scale
@@ -66,8 +66,9 @@ def build_display(frame: np.ndarray, bg_model: BackgroundModel, mask: np.ndarray
     for i, label in enumerate(labels):
         (tw, _), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.45, 1)
         x = (i + 1) * panel_w - tw - 5
-        cv2.putText(display, label, (x, 15), cv2.FONT_HERSHEY_SIMPLEX,
-                    0.45, (0, 255, 0), 1, cv2.LINE_AA)
+        cv2.putText(
+            display, label, (x, 15), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 0), 1, cv2.LINE_AA
+        )
 
     # Metrics at bottom
     dh = display.shape[0]
@@ -79,8 +80,16 @@ def build_display(frame: np.ndarray, bg_model: BackgroundModel, mask: np.ndarray
         f"Warmup: {warmup_pct:.0f}%  Motion: {motion_pct:.1f}%",
     ]
     for i, line in enumerate(lines):
-        cv2.putText(display, line, (5, dh - 8 - i * 18),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 0), 1, cv2.LINE_AA)
+        cv2.putText(
+            display,
+            line,
+            (5, dh - 8 - i * 18),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.4,
+            (0, 255, 0),
+            1,
+            cv2.LINE_AA,
+        )
 
     return display
 
@@ -139,11 +148,13 @@ def run(url: str, alpha: float, threshold: int, warmup: int, duration: int) -> N
 
                         sm = grabber.metrics
                         display = build_display(
-                            last_frame, bg_model,
-                            last_mask if last_mask is not None else np.zeros(
-                                last_frame.shape[:2], dtype=np.uint8
-                            ),
-                            last_fm, sm,
+                            last_frame,
+                            bg_model,
+                            last_mask
+                            if last_mask is not None
+                            else np.zeros(last_frame.shape[:2], dtype=np.uint8),
+                            last_fm,
+                            sm,
                         )
                         cv2.imshow(WINDOW_NAME, display)
 
@@ -197,7 +208,9 @@ def main():
     parser.add_argument("--alpha", type=float, default=0.05, help="EMA learning rate")
     parser.add_argument("--threshold", type=int, default=15, help="Motion threshold (0-255)")
     parser.add_argument("--warmup", type=int, default=60, help="Warmup frames")
-    parser.add_argument("--duration", type=int, default=0, help="Duration in seconds (0 = unlimited)")
+    parser.add_argument(
+        "--duration", type=int, default=0, help="Duration in seconds (0 = unlimited)"
+    )
     args = parser.parse_args()
 
     signal.signal(signal.SIGINT, signal_handler)

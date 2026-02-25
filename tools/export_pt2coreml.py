@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
-"""Export YOLO11 .pt weights to ONNX format.
+"""Export YOLO11 PyTorch weights to Core ML (.mlpackage) format.
 
-Requires: pip install ultralytics
+Requires: pip install ultralytics coremltools
 
 Usage:
-    python tools/export_pt2onnx.py
-    python tools/export_pt2onnx.py --input models/yolo11s.pt --output models/yolo11s.onnx
+    python tools/export_pt2coreml.py
+    python tools/export_pt2coreml.py --input models/yolo11s.pt --output models/yolo11s.mlpackage
 """
 
 import argparse
+import shutil
 import sys
 from pathlib import Path
 
@@ -28,24 +29,28 @@ def export(input_path: str, output_path: str) -> None:
     print(f"Loading {pt}")
     model = YOLO(str(pt))
 
-    print("Exporting to ONNX...")
-    model.export(format="onnx", imgsz=640, simplify=True)
+    print("Exporting to Core ML...")
+    model.export(format="coreml", imgsz=640, nms=False)
 
     # ultralytics writes next to the .pt file by default
-    default_onnx = pt.with_suffix(".onnx")
+    default_mlpackage = pt.with_suffix(".mlpackage")
     out = Path(output_path)
 
-    if default_onnx != out:
-        default_onnx.rename(out)
+    if default_mlpackage != out:
+        if out.exists():
+            shutil.rmtree(out)
+        default_mlpackage.rename(out)
 
-    size_mb = out.stat().st_size / (1024 * 1024)
+    size_mb = sum(f.stat().st_size for f in out.rglob("*") if f.is_file()) / (1024 * 1024)
     print(f"Done: {out} ({size_mb:.1f} MB)")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Export YOLO11s to ONNX")
+    parser = argparse.ArgumentParser(description="Export YOLO11s to Core ML")
     parser.add_argument("--input", default="models/yolo11s.pt", help="Path to .pt weights")
-    parser.add_argument("--output", default="models/yolo11s.onnx", help="Output ONNX path")
+    parser.add_argument(
+        "--output", default="models/yolo11s.mlpackage", help="Output Core ML path"
+    )
     args = parser.parse_args()
     export(args.input, args.output)
 

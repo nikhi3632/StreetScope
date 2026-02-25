@@ -1,12 +1,13 @@
-"""YOLOv8 object detection via ONNX Runtime."""
+"""YOLOv8 object detection via Core ML."""
 
 import threading
 import time
 from dataclasses import dataclass
 
+import coremltools as ct
 import cv2
 import numpy as np
-import onnxruntime as ort
+from PIL import Image
 
 # COCO class IDs for vehicles
 COCO_VEHICLE_CLASSES: dict[int, str] = {
@@ -19,18 +20,86 @@ COCO_VEHICLE_CLASSES: dict[int, str] = {
 
 # Full COCO 80-class names
 COCO_NAMES: list[str] = [
-    "person", "bicycle", "car", "motorcycle", "airplane", "bus", "train", "truck",
-    "boat", "traffic light", "fire hydrant", "stop sign", "parking meter", "bench",
-    "bird", "cat", "dog", "horse", "sheep", "cow", "elephant", "bear", "zebra",
-    "giraffe", "backpack", "umbrella", "handbag", "tie", "suitcase", "frisbee",
-    "skis", "snowboard", "sports ball", "kite", "baseball bat", "baseball glove",
-    "skateboard", "surfboard", "tennis racket", "bottle", "wine glass", "cup",
-    "fork", "knife", "spoon", "bowl", "banana", "apple", "sandwich", "orange",
-    "broccoli", "carrot", "hot dog", "pizza", "donut", "cake", "chair", "couch",
-    "potted plant", "bed", "dining table", "toilet", "tv", "laptop", "mouse",
-    "remote", "keyboard", "cell phone", "microwave", "oven", "toaster", "sink",
-    "refrigerator", "book", "clock", "vase", "scissors", "teddy bear",
-    "hair drier", "toothbrush",
+    "person",
+    "bicycle",
+    "car",
+    "motorcycle",
+    "airplane",
+    "bus",
+    "train",
+    "truck",
+    "boat",
+    "traffic light",
+    "fire hydrant",
+    "stop sign",
+    "parking meter",
+    "bench",
+    "bird",
+    "cat",
+    "dog",
+    "horse",
+    "sheep",
+    "cow",
+    "elephant",
+    "bear",
+    "zebra",
+    "giraffe",
+    "backpack",
+    "umbrella",
+    "handbag",
+    "tie",
+    "suitcase",
+    "frisbee",
+    "skis",
+    "snowboard",
+    "sports ball",
+    "kite",
+    "baseball bat",
+    "baseball glove",
+    "skateboard",
+    "surfboard",
+    "tennis racket",
+    "bottle",
+    "wine glass",
+    "cup",
+    "fork",
+    "knife",
+    "spoon",
+    "bowl",
+    "banana",
+    "apple",
+    "sandwich",
+    "orange",
+    "broccoli",
+    "carrot",
+    "hot dog",
+    "pizza",
+    "donut",
+    "cake",
+    "chair",
+    "couch",
+    "potted plant",
+    "bed",
+    "dining table",
+    "toilet",
+    "tv",
+    "laptop",
+    "mouse",
+    "remote",
+    "keyboard",
+    "cell phone",
+    "microwave",
+    "oven",
+    "toaster",
+    "sink",
+    "refrigerator",
+    "book",
+    "clock",
+    "vase",
+    "scissors",
+    "teddy bear",
+    "hair drier",
+    "toothbrush",
 ]
 
 
@@ -54,16 +123,18 @@ class Detection:
         return ((x1 + x2) / 2.0, (y1 + y2) / 2.0)
 
 
-def preprocess(frame: np.ndarray, input_size: int = 640) -> tuple[np.ndarray, float, tuple[float, float]]:
-    """Letterbox resize and normalize for YOLOv8.
+def preprocess(
+    frame: np.ndarray, input_size: int = 640
+) -> tuple[Image.Image, float, tuple[float, float]]:
+    """Letterbox resize for YOLOv8 Core ML input.
 
     Args:
         frame: BGR uint8 image (H, W, 3).
         input_size: Model input dimension (square).
 
     Returns:
-        (blob, ratio, (pad_w, pad_h))
-        blob: float32 NCHW tensor [1, 3, input_size, input_size] in [0, 1].
+        (image, ratio, (pad_w, pad_h))
+        image: RGB PIL Image (input_size x input_size).
         ratio: scale factor applied.
         (pad_w, pad_h): letterbox padding added.
     """
@@ -78,17 +149,17 @@ def preprocess(frame: np.ndarray, input_size: int = 640) -> tuple[np.ndarray, fl
     pad_h = (input_size - new_h) / 2.0
     top, bottom = int(round(pad_h - 0.1)), int(round(pad_h + 0.1))
     left, right = int(round(pad_w - 0.1)), int(round(pad_w + 0.1))
-    padded = cv2.copyMakeBorder(resized, top, bottom, left, right,
-                                cv2.BORDER_CONSTANT, value=(114, 114, 114))
+    padded = cv2.copyMakeBorder(
+        resized, top, bottom, left, right, cv2.BORDER_CONSTANT, value=(114, 114, 114)
+    )
 
     # Ensure exact size (rounding can be off by 1)
     if padded.shape[0] != input_size or padded.shape[1] != input_size:
         padded = cv2.resize(padded, (input_size, input_size))
 
-    # BGR -> RGB, HWC -> CHW, normalize to [0, 1], add batch dim
-    blob = padded[:, :, ::-1].astype(np.float32) / 255.0
-    blob = np.ascontiguousarray(blob.transpose(2, 0, 1)[np.newaxis])
-    return blob, ratio, (pad_w, pad_h)
+    # BGR -> RGB, wrap as PIL Image for Core ML
+    image = Image.fromarray(cv2.cvtColor(padded, cv2.COLOR_BGR2RGB))
+    return image, ratio, (pad_w, pad_h)
 
 
 def postprocess(
@@ -139,7 +210,10 @@ def postprocess(
 
     # NMS via OpenCV
     indices = cv2.dnn.NMSBoxes(
-        boxes.tolist(), scores.tolist(), conf_threshold, iou_threshold,
+        boxes.tolist(),
+        scores.tolist(),
+        conf_threshold,
+        iou_threshold,
     )
     if len(indices) == 0:
         return []
@@ -167,31 +241,29 @@ def postprocess(
             continue
 
         cid = int(cids[i])
-        detections.append(Detection(
-            bbox=(bx1, by1, bx2, by2),
-            confidence=float(scores[i]),
-            class_id=cid,
-            class_name=COCO_NAMES[cid] if cid < len(COCO_NAMES) else "unknown",
-        ))
+        detections.append(
+            Detection(
+                bbox=(bx1, by1, bx2, by2),
+                confidence=float(scores[i]),
+                class_id=cid,
+                class_name=COCO_NAMES[cid] if cid < len(COCO_NAMES) else "unknown",
+            )
+        )
 
     return detections
 
 
 class YoloDetector:
-    """YOLOv8 detector using ONNX Runtime."""
+    """YOLOv8 detector using Core ML."""
 
-    def __init__(self, model_path: str, conf_threshold: float = 0.25,
-                 iou_threshold: float = 0.45) -> None:
-        opts = ort.SessionOptions()
-        opts.log_severity_level = 3  # ERROR only, suppress CoreML partition warnings
-        self.session = ort.InferenceSession(
-            model_path,
-            sess_options=opts,
-            providers=["CoreMLExecutionProvider"],
-        )
-        self.input_name = self.session.get_inputs()[0].name
-        inp_shape = self.session.get_inputs()[0].shape
-        self.input_size: int = inp_shape[2]  # 640
+    def __init__(
+        self, model_path: str, conf_threshold: float = 0.25, iou_threshold: float = 0.45
+    ) -> None:
+        self.model = ct.models.MLModel(model_path, compute_units=ct.ComputeUnit.ALL)
+        spec = self.model.get_spec()
+        self.input_name = spec.description.input[0].name
+        self.output_name = spec.description.output[0].name
+        self.input_size: int = 640
         self.conf_threshold = conf_threshold
         self.iou_threshold = iou_threshold
 
@@ -205,12 +277,12 @@ class YoloDetector:
         Returns:
             List of Detection objects.
         """
-        blob, ratio, pad = preprocess(frame, self.input_size)
-        output = self.session.run(None, {self.input_name: blob})[0]
+        image, ratio, pad = preprocess(frame, self.input_size)
+        result = self.model.predict({self.input_name: image})
+        output = np.array(result[self.output_name])
         orig_shape = (frame.shape[0], frame.shape[1])
 
-        dets = postprocess(output, self.conf_threshold, self.iou_threshold,
-                           ratio, pad, orig_shape)
+        dets = postprocess(output, self.conf_threshold, self.iou_threshold, ratio, pad, orig_shape)
 
         if vehicles_only:
             dets = [d for d in dets if d.class_id in COCO_VEHICLE_CLASSES]
@@ -247,7 +319,7 @@ class AsyncDetector:
         self.latest_result: tuple[list[Detection], float] | None = None
 
     def start(self) -> None:
-        """Start the inference thread. Loads the ONNX model."""
+        """Start the inference thread. Loads the Core ML model."""
         self.thread = threading.Thread(target=self.run, daemon=True)
         self.thread.start()
 

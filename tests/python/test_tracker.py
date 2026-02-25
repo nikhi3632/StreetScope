@@ -21,6 +21,7 @@ from src.python.perception.tracker import (
 # Helpers — IC Affine tests
 # ---------------------------------------------------------------------------
 
+
 def make_template(h=40, w=60):
     """Create a synthetic template with gradients (non-degenerate)."""
     rng = np.random.RandomState(42)
@@ -49,7 +50,7 @@ def embed_template(template, image_size=(288, 512), origin=(100, 80)):
     image = make_textured_image(h, w)
     ox, oy = origin
     th, tw = template.shape
-    image[oy:oy + th, ox:ox + tw] = template
+    image[oy : oy + th, ox : ox + tw] = template
     return image
 
 
@@ -57,9 +58,11 @@ def embed_template(template, image_size=(288, 512), origin=(100, 80)):
 # Helpers — Tracker tests
 # ---------------------------------------------------------------------------
 
+
 def make_det(x1, y1, x2, y2, conf=0.9, class_id=2, class_name="car"):
-    return Detection(bbox=(x1, y1, x2, y2), confidence=conf,
-                     class_id=class_id, class_name=class_name)
+    return Detection(
+        bbox=(x1, y1, x2, y2), confidence=conf, class_id=class_id, class_name=class_name
+    )
 
 
 def make_frame(h=288, w=512):
@@ -93,6 +96,7 @@ def add_vehicle(frame, x1, y1, x2, y2, seed=7):
 # IC Affine precomputation
 # ===========================================================================
 
+
 class TestPrecomputeIC:
     def test_returns_correct_shapes(self):
         template = make_template(40, 60)
@@ -114,6 +118,7 @@ class TestPrecomputeIC:
 # IC Affine tracking
 # ===========================================================================
 
+
 class TestICAffineSteady:
     """IC Affine should converge when template is at identity warp."""
 
@@ -125,8 +130,14 @@ class TestICAffineSteady:
         p = np.zeros(6, dtype=np.float64)
 
         p_out, ncc = ic_affine_step(
-            template, image, origin, p, sd, H_inv,
-            num_iters=20, threshold=0.01,
+            template,
+            image,
+            origin,
+            p,
+            sd,
+            H_inv,
+            num_iters=20,
+            threshold=0.01,
         )
         assert ncc > 0.95
         assert np.linalg.norm(p_out) < 0.5
@@ -152,7 +163,7 @@ class TestICAffinePureTranslation:
         image0 = (checker * 100 + 60 + rng.randn(h, w) * 10).clip(10, 245)
 
         ox, oy, tw, th = 100, 80, 60, 40
-        template = image0[oy:oy + th, ox:ox + tw].copy()
+        template = image0[oy : oy + th, ox : ox + tw].copy()
         origin = np.array([ox, oy], dtype=np.float64)
 
         sd, H_inv = precompute_ic(template)
@@ -161,13 +172,22 @@ class TestICAffinePureTranslation:
         # Shift entire image by (3, 2)
         M = np.float64([[1, 0, 3], [0, 1, 2]])
         image1 = cv2.warpAffine(
-            image0, M, (w, h), borderMode=cv2.BORDER_REPLICATE,
+            image0,
+            M,
+            (w, h),
+            borderMode=cv2.BORDER_REPLICATE,
         )
 
         p = np.zeros(6, dtype=np.float64)
         p_out, ncc = ic_affine_step(
-            template, image1, origin, p, sd, H_inv,
-            num_iters=50, threshold=0.001,
+            template,
+            image1,
+            origin,
+            p,
+            sd,
+            H_inv,
+            num_iters=50,
+            threshold=0.001,
         )
 
         # Check via bbox — center should be at (133, 102) = original + shift
@@ -184,6 +204,7 @@ class TestICAffinePureTranslation:
 # ===========================================================================
 # Warp bbox
 # ===========================================================================
+
 
 class TestWarpBbox:
     def test_identity_warp(self):
@@ -211,6 +232,7 @@ class TestWarpBbox:
 # Template correction
 # ===========================================================================
 
+
 class TestCorrectTemplate:
     def test_returns_new_precomputation(self):
         crop = make_template(30, 50)
@@ -224,6 +246,7 @@ class TestCorrectTemplate:
 # ===========================================================================
 # Appearance basis (PCA)
 # ===========================================================================
+
 
 class TestAppearanceBasis:
     def test_too_few_samples(self):
@@ -275,8 +298,14 @@ class TestAppearanceBasis:
         p = np.zeros(6, dtype=np.float64)
 
         p_out, ncc = ic_affine_step(
-            template, image, origin, p, sd, H_inv,
-            num_iters=20, threshold=0.01,
+            template,
+            image,
+            origin,
+            p,
+            sd,
+            H_inv,
+            num_iters=20,
+            threshold=0.01,
             appearance_basis=basis,
         )
         assert ncc > 0.8
@@ -285,6 +314,7 @@ class TestAppearanceBasis:
 # ===========================================================================
 # TrackedObject
 # ===========================================================================
+
 
 class TestTrackedObject:
     def test_fields(self):
@@ -305,8 +335,12 @@ class TestTrackedObject:
 
     def test_center(self):
         t = TrackedObject(
-            track_id=1, bbox=(10, 20, 60, 80),
-            confidence=0.5, class_id=2, class_name="car", trail=[],
+            track_id=1,
+            bbox=(10, 20, 60, 80),
+            confidence=0.5,
+            class_id=2,
+            class_name="car",
+            trail=[],
         )
         cx, cy = t.center
         assert cx == pytest.approx(35.0)
@@ -314,8 +348,12 @@ class TestTrackedObject:
 
     def test_area(self):
         t = TrackedObject(
-            track_id=1, bbox=(10, 20, 60, 80),
-            confidence=0.5, class_id=2, class_name="car", trail=[],
+            track_id=1,
+            bbox=(10, 20, 60, 80),
+            confidence=0.5,
+            class_id=2,
+            class_name="car",
+            trail=[],
         )
         assert t.area == 3000
 
@@ -324,20 +362,21 @@ class TestTrackedObject:
 # Tracker construction
 # ===========================================================================
 
+
 class TestTrackerConstruction:
     def test_default_params(self):
         tracker = Tracker()
         assert tracker.trail_duration == 2.0
 
     def test_custom_params(self):
-        tracker = Tracker(frame_rate=30, trail_duration=3.0,
-                          match_iou=0.4, ncc_kill=0.3)
+        tracker = Tracker(frame_rate=30, trail_duration=3.0, match_iou=0.4, ncc_kill=0.3)
         assert tracker.trail_duration == 3.0
 
 
 # ===========================================================================
 # Tracker update
 # ===========================================================================
+
 
 class TestTrackerUpdate:
     def test_empty_detections(self):
@@ -414,6 +453,7 @@ class TestTrackerUpdate:
 # Tracker trails
 # ===========================================================================
 
+
 class TestTrackerTrails:
     def test_trail_grows_over_frames(self):
         tracker = Tracker()
@@ -473,6 +513,7 @@ class TestTrackerTrails:
 # ===========================================================================
 # Tracker template correction
 # ===========================================================================
+
 
 class TestTrackerTemplateCorrection:
     def test_detection_resets_lost_counter(self):

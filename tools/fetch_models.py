@@ -2,7 +2,7 @@
 """Download YOLO11s PyTorch weights.
 
 Downloads yolo11s.pt from Ultralytics GitHub releases.
-To export to ONNX, run: python tools/export_pt2onnx.py
+To export to Core ML, run: python tools/export_pt2coreml.py
 
 Usage:
     python tools/fetch_models.py
@@ -39,8 +39,9 @@ def download(url: str, dest: Path) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Download YOLO11s weights")
-    parser.add_argument("--output-dir", default="models/",
-                        help="Directory to save models (default: models/)")
+    parser.add_argument(
+        "--output-dir", default="models/", help="Directory to save models (default: models/)"
+    )
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)
@@ -54,11 +55,11 @@ def main() -> None:
     else:
         download(PT_URL, pt_path)
 
-    onnx_path = output_dir / "yolo11s.onnx"
-    if not onnx_path.exists():
+    mlpackage_path = output_dir / "yolo11s.mlpackage"
+    if not mlpackage_path.exists():
         print()
-        print("Next step: export to ONNX")
-        print("  python tools/export_pt2onnx.py")
+        print("Next step: export to Core ML")
+        print("  python tools/export_pt2coreml.py")
 
 
 if __name__ == "__main__":

@@ -1,0 +1,40 @@
+# Suppressions for Python's internal memory allocator.
+# Python uses arena-based allocation that Valgrind reports as "possible leaks"
+# because the arenas are freed at shutdown, not individually.
+# These are not real leaks — suppress them to focus on our C++ code.
+
+{
+    python-pymem-malloc
+    Memcheck:Leak
+    match-leak-kinds: possible
+    ...
+    fun:PyMem_Malloc
+}
+{
+    python-pymem-realloc
+    Memcheck:Leak
+    match-leak-kinds: possible
+    ...
+    fun:PyMem_Realloc
+}
+{
+    python-pyobject-malloc
+    Memcheck:Leak
+    match-leak-kinds: possible
+    ...
+    fun:PyObject_Malloc
+}
+{
+    python-pyobject-realloc
+    Memcheck:Leak
+    match-leak-kinds: possible
+    ...
+    fun:PyObject_Realloc
+}
+{
+    python-pyobject-init
+    Memcheck:Leak
+    match-leak-kinds: possible
+    ...
+    fun:_PyObject_Init
+}

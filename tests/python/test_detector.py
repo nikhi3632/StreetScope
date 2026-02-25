@@ -11,7 +11,7 @@ from src.python.perception.detector import (
     preprocess,
 )
 
-MODEL_PATH = "models/yolo11s.onnx"
+MODEL_PATH = "models/yolo11s.mlpackage"
 
 
 class TestDetection:
@@ -45,17 +45,14 @@ class TestDetection:
 
 
 class TestPreprocess:
-    def test_output_shape(self):
-        frame = np.random.randint(0, 255, (240, 320, 3), dtype=np.uint8)
-        blob, ratio, pad = preprocess(frame, input_size=640)
-        assert blob.shape == (1, 3, 640, 640)
-        assert blob.dtype == np.float32
+    def test_output_is_pil_image(self):
+        from PIL import Image
 
-    def test_pixel_range(self):
-        frame = np.full((100, 100, 3), 255, dtype=np.uint8)
-        blob, _, _ = preprocess(frame, input_size=640)
-        assert blob.max() <= 1.0
-        assert blob.min() >= 0.0
+        frame = np.random.randint(0, 255, (240, 320, 3), dtype=np.uint8)
+        image, ratio, pad = preprocess(frame, input_size=640)
+        assert isinstance(image, Image.Image)
+        assert image.size == (640, 640)
+        assert image.mode == "RGB"
 
     def test_preserves_aspect_ratio(self):
         """Letterboxing should preserve aspect ratio via padding."""
@@ -90,8 +87,14 @@ class TestPostprocess:
     def test_single_detection(self):
         # Place a car (class 2) at center of 640x640
         output = self.make_output(320, 320, 100, 80, class_id=2, score=0.9)
-        dets = postprocess(output, conf_threshold=0.5, iou_threshold=0.5,
-                           ratio=1.0, pad=(0, 0), orig_shape=(640, 640))
+        dets = postprocess(
+            output,
+            conf_threshold=0.5,
+            iou_threshold=0.5,
+            ratio=1.0,
+            pad=(0, 0),
+            orig_shape=(640, 640),
+        )
         assert len(dets) == 1
         assert dets[0].class_id == 2
         assert dets[0].class_name == "car"
@@ -99,14 +102,26 @@ class TestPostprocess:
 
     def test_low_confidence_filtered(self):
         output = self.make_output(320, 320, 100, 80, class_id=2, score=0.1)
-        dets = postprocess(output, conf_threshold=0.5, iou_threshold=0.5,
-                           ratio=1.0, pad=(0, 0), orig_shape=(640, 640))
+        dets = postprocess(
+            output,
+            conf_threshold=0.5,
+            iou_threshold=0.5,
+            ratio=1.0,
+            pad=(0, 0),
+            orig_shape=(640, 640),
+        )
         assert len(dets) == 0
 
     def test_empty_output(self):
         output = np.zeros((1, 84, 8400), dtype=np.float32)
-        dets = postprocess(output, conf_threshold=0.5, iou_threshold=0.5,
-                           ratio=1.0, pad=(0, 0), orig_shape=(640, 640))
+        dets = postprocess(
+            output,
+            conf_threshold=0.5,
+            iou_threshold=0.5,
+            ratio=1.0,
+            pad=(0, 0),
+            orig_shape=(640, 640),
+        )
         assert len(dets) == 0
 
     def test_bbox_rescaled_to_original(self):
@@ -114,8 +129,14 @@ class TestPostprocess:
         # Simulating 320x240 input: ratio=2.0, pad=(0, 80)
         # Detection at (320, 320) in model space -> (160, 120) in original
         output = self.make_output(320, 320, 100, 80, class_id=2, score=0.9)
-        dets = postprocess(output, conf_threshold=0.5, iou_threshold=0.5,
-                           ratio=2.0, pad=(0, 80), orig_shape=(240, 320))
+        dets = postprocess(
+            output,
+            conf_threshold=0.5,
+            iou_threshold=0.5,
+            ratio=2.0,
+            pad=(0, 80),
+            orig_shape=(240, 320),
+        )
         assert len(dets) == 1
         x1, y1, x2, y2 = dets[0].bbox
         # Center should be near (160, 120) in original coords
@@ -127,8 +148,14 @@ class TestPostprocess:
         """Bounding boxes should not extend beyond image boundaries."""
         # Detection near edge
         output = self.make_output(10, 10, 100, 100, class_id=2, score=0.9)
-        dets = postprocess(output, conf_threshold=0.5, iou_threshold=0.5,
-                           ratio=1.0, pad=(0, 0), orig_shape=(640, 640))
+        dets = postprocess(
+            output,
+            conf_threshold=0.5,
+            iou_threshold=0.5,
+            ratio=1.0,
+            pad=(0, 0),
+            orig_shape=(640, 640),
+        )
         if len(dets) > 0:
             x1, y1, x2, y2 = dets[0].bbox
             assert x1 >= 0
@@ -150,7 +177,7 @@ class TestCocoVehicleClasses:
 
 
 class TestYoloDetector:
-    @pytest.fixture
+    @pytest.fixture(scope="class")
     def detector(self):
         return YoloDetector(MODEL_PATH)
 

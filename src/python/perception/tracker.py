@@ -18,6 +18,7 @@ from src.python.perception.detector import Detection
 # IC Affine precomputation
 # ---------------------------------------------------------------------------
 
+
 def precompute_ic(template: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """Precompute steepest-descent images and inverse Hessian for IC Affine.
 
@@ -77,6 +78,7 @@ def precompute_ic(template: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
 # IC Affine tracking step
 # ---------------------------------------------------------------------------
 
+
 def ic_affine_step(
     template: np.ndarray,
     image: np.ndarray,
@@ -124,10 +126,13 @@ def ic_affine_step(
 
     for _ in range(num_iters):
         # Current warp matrix
-        W = np.array([
-            [1 + p[0], p[2], p[4]],
-            [p[1], 1 + p[3], p[5]],
-        ], dtype=np.float64)
+        W = np.array(
+            [
+                [1 + p[0], p[2], p[4]],
+                [p[1], 1 + p[3], p[5]],
+            ],
+            dtype=np.float64,
+        )
 
         # Warp template coordinates into image space
         warped_coords = W @ coords  # (2, N)
@@ -135,15 +140,16 @@ def ic_affine_step(
         wy = warped_coords[1] + origin[1]
 
         # Bounds check — if warp goes mostly off-frame, bail
-        if (np.median(wx) < 0 or np.median(wx) >= iw
-                or np.median(wy) < 0 or np.median(wy) >= ih):
+        if np.median(wx) < 0 or np.median(wx) >= iw or np.median(wy) < 0 or np.median(wy) >= ih:
             break
 
         # Sample image at warped locations
         map_x = wx.reshape(th, tw).astype(np.float32)
         map_y = wy.reshape(th, tw).astype(np.float32)
         warped_img = cv2.remap(
-            image, map_x, map_y,
+            image,
+            map_x,
+            map_y,
             cv2.INTER_LINEAR,
             borderMode=cv2.BORDER_REPLICATE,
         )
@@ -157,18 +163,21 @@ def ic_affine_step(
 
         # Project out appearance variation if basis is available
         if appearance_basis is not None:
-            coeffs = appearance_basis @ error          # (K,)
+            coeffs = appearance_basis @ error  # (K,)
             error = error - appearance_basis.T @ coeffs  # (N,)
 
         # Parameter update
         dp = H_inv @ (sd.T @ error)  # (6,)
 
         # Inverse compositional update: W ← W ∘ W(Δp)⁻¹
-        dW = np.array([
-            [1 + dp[0], dp[2], dp[4]],
-            [dp[1], 1 + dp[3], dp[5]],
-            [0, 0, 1],
-        ], dtype=np.float64)
+        dW = np.array(
+            [
+                [1 + dp[0], dp[2], dp[4]],
+                [dp[1], 1 + dp[3], dp[5]],
+                [0, 0, 1],
+            ],
+            dtype=np.float64,
+        )
 
         try:
             dW_inv = np.linalg.inv(dW)
@@ -189,10 +198,13 @@ def ic_affine_step(
             break
 
     # ── Compute NCC for quality assessment ─────────────────────────────
-    W = np.array([
-        [1 + p[0], p[2], p[4]],
-        [p[1], 1 + p[3], p[5]],
-    ], dtype=np.float64)
+    W = np.array(
+        [
+            [1 + p[0], p[2], p[4]],
+            [p[1], 1 + p[3], p[5]],
+        ],
+        dtype=np.float64,
+    )
     warped_coords = W @ coords
     wx = warped_coords[0] + origin[0]
     wy = warped_coords[1] + origin[1]
@@ -200,7 +212,9 @@ def ic_affine_step(
     map_x = wx.reshape(th, tw).astype(np.float32)
     map_y = wy.reshape(th, tw).astype(np.float32)
     warped_img = cv2.remap(
-        image, map_x, map_y,
+        image,
+        map_x,
+        map_y,
         cv2.INTER_LINEAR,
         borderMode=cv2.BORDER_REPLICATE,
     )
@@ -221,6 +235,7 @@ def ic_affine_step(
 # Bounding box from warp parameters
 # ---------------------------------------------------------------------------
 
+
 def warp_bbox(
     origin: np.ndarray,
     template_size: tuple[int, int],
@@ -237,18 +252,24 @@ def warp_bbox(
         (x1, y1, x2, y2) bounding box in image coordinates.
     """
     tw, th = template_size
-    W = np.array([
-        [1 + p[0], p[2], p[4]],
-        [p[1], 1 + p[3], p[5]],
-    ], dtype=np.float64)
+    W = np.array(
+        [
+            [1 + p[0], p[2], p[4]],
+            [p[1], 1 + p[3], p[5]],
+        ],
+        dtype=np.float64,
+    )
 
     # Four corners of the template
-    corners = np.array([
-        [0, 0, 1],
-        [tw, 0, 1],
-        [tw, th, 1],
-        [0, th, 1],
-    ], dtype=np.float64).T  # (3, 4)
+    corners = np.array(
+        [
+            [0, 0, 1],
+            [tw, 0, 1],
+            [tw, th, 1],
+            [0, th, 1],
+        ],
+        dtype=np.float64,
+    ).T  # (3, 4)
 
     warped = W @ corners  # (2, 4)
     warped[0] += origin[0]
@@ -264,6 +285,7 @@ def warp_bbox(
 # ---------------------------------------------------------------------------
 # Template correction
 # ---------------------------------------------------------------------------
+
 
 def correct_template(
     new_crop: np.ndarray,
@@ -288,6 +310,7 @@ def correct_template(
 # ---------------------------------------------------------------------------
 # Appearance basis (PCA)
 # ---------------------------------------------------------------------------
+
 
 def build_appearance_basis(
     samples: list[np.ndarray],
@@ -328,6 +351,7 @@ def build_appearance_basis(
 # Tracked object (public output)
 # ---------------------------------------------------------------------------
 
+
 @dataclass(frozen=True)
 class TrackedObject:
     """A tracked detection with persistent ID and trajectory trail."""
@@ -354,16 +378,27 @@ class TrackedObject:
 # Per-object tracking state
 # ---------------------------------------------------------------------------
 
+
 class Track:
     """Internal per-object tracking state."""
 
     __slots__ = (
-        "track_id", "class_id", "class_name", "det_confidence",
-        "template", "origin", "size", "warp_params",
-        "sd", "H_inv",
-        "appearance_samples", "appearance_basis",
-        "ncc", "frames_without_detection",
-        "trail", "trail_duration",
+        "track_id",
+        "class_id",
+        "class_name",
+        "det_confidence",
+        "template",
+        "origin",
+        "size",
+        "warp_params",
+        "sd",
+        "H_inv",
+        "appearance_samples",
+        "appearance_basis",
+        "ncc",
+        "frames_without_detection",
+        "trail",
+        "trail_duration",
     )
 
     def __init__(
@@ -383,8 +418,8 @@ class Track:
         self.det_confidence = det_confidence
 
         self.template = template  # grayscale float64 (H, W)
-        self.origin = origin      # (x, y) float64
-        self.size = size          # (width, height)
+        self.origin = origin  # (x, y) float64
+        self.size = size  # (width, height)
         self.warp_params = np.zeros(6, dtype=np.float64)
 
         sd, H_inv = precompute_ic(template)
@@ -443,7 +478,7 @@ class Track:
         area_ratio = new_area / max(1, orig_area)
 
         # Sanity: reject if center moved more than template diagonal
-        diag = (tw ** 2 + th ** 2) ** 0.5
+        diag = (tw**2 + th**2) ** 0.5
         prev_cx = (prev_bbox[0] + prev_bbox[2]) / 2
         prev_cy = (prev_bbox[1] + prev_bbox[3]) / 2
         new_cx = (new_bbox[0] + new_bbox[2]) / 2
@@ -458,8 +493,9 @@ class Track:
 
         return new_bbox
 
-    def correct(self, image_gray: np.ndarray, bbox: tuple[int, int, int, int],
-                det_confidence: float) -> None:
+    def correct(
+        self, image_gray: np.ndarray, bbox: tuple[int, int, int, int], det_confidence: float
+    ) -> None:
         """Template correction from a YOLO re-detection.
 
         Resets the warp to identity using the fresh detection crop.
@@ -484,7 +520,8 @@ class Track:
             # Rebuild basis periodically
             if len(self.appearance_samples) % 5 == 0:
                 basis = build_appearance_basis(
-                    self.appearance_samples, n_components=4,
+                    self.appearance_samples,
+                    n_components=4,
                 )
                 if basis is not None:
                     self.appearance_basis = basis
@@ -528,6 +565,7 @@ class Track:
 # IoU helper
 # ---------------------------------------------------------------------------
 
+
 def iou(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> float:
     """Intersection-over-Union of two axis-aligned bounding boxes."""
     x1 = max(a[0], b[0])
@@ -546,6 +584,7 @@ def iou(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> float:
 # ---------------------------------------------------------------------------
 # Tracker
 # ---------------------------------------------------------------------------
+
 
 class Tracker:
     """LK hybrid tracker.
@@ -648,8 +687,7 @@ class Tracker:
         # ── 6. Kill dead tracks ────────────────────────────────────────
         alive: list[Track] = []
         for track in self.tracks:
-            if (track.ncc < self.ncc_kill
-                    and track.frames_without_detection > 5):
+            if track.ncc < self.ncc_kill and track.frames_without_detection > 5:
                 continue
             if track.frames_without_detection > self.max_lost:
                 continue
@@ -674,14 +712,16 @@ class Tracker:
             )
             track.append_trail(bbox)
 
-            results.append(TrackedObject(
-                track_id=track.track_id,
-                bbox=bbox,
-                confidence=track.det_confidence,
-                class_id=track.class_id,
-                class_name=track.class_name,
-                trail=track.get_trail_points(),
-            ))
+            results.append(
+                TrackedObject(
+                    track_id=track.track_id,
+                    bbox=bbox,
+                    confidence=track.det_confidence,
+                    class_id=track.class_id,
+                    class_name=track.class_name,
+                    trail=track.get_trail_points(),
+                )
+            )
 
         self.prev_gray = gray
         return results

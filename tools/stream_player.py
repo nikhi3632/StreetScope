@@ -29,6 +29,7 @@ from src.python.core.stream import (
 
 try:
     import psutil
+
     HAS_PSUTIL = True
 except ImportError:
     HAS_PSUTIL = False
@@ -63,8 +64,9 @@ def draw_metrics_overlay(frame: np.ndarray, fm, sm: StreamMetrics, mem_mb: float
 
     y = 20
     for line in lines:
-        cv2.putText(display, line, (10, y), cv2.FONT_HERSHEY_SIMPLEX,
-                     0.5, (0, 255, 0), 1, cv2.LINE_AA)
+        cv2.putText(
+            display, line, (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1, cv2.LINE_AA
+        )
         y += 20
 
     return display
@@ -168,8 +170,9 @@ def main():
 
     parser = argparse.ArgumentParser(description="Live HLS stream player with metrics")
     parser.add_argument("--url", required=True, help="HLS stream URL")
-    parser.add_argument("--duration", type=int, default=0,
-                        help="Duration in seconds (0 = unlimited)")
+    parser.add_argument(
+        "--duration", type=int, default=0, help="Duration in seconds (0 = unlimited)"
+    )
     args = parser.parse_args()
 
     # Install signal handlers for clean shutdown

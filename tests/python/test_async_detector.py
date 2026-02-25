@@ -4,7 +4,18 @@ import numpy as np
 
 from src.python.perception.detector import AsyncDetector, Detection
 
-MODEL_PATH = "models/yolo11s.onnx"
+MODEL_PATH = "models/yolo11s.mlpackage"
+
+
+def poll_latest(det, timeout=10.0, interval=0.1):
+    """Poll det.latest() until non-None or timeout (seconds)."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        result = det.latest()
+        if result is not None:
+            return result
+        time.sleep(interval)
+    return None
 
 
 class TestAsyncDetectorConstruction:
@@ -51,13 +62,11 @@ class TestAsyncDetectorInference:
     def test_submit_and_get_result(self):
         det = AsyncDetector(MODEL_PATH)
         det.start()
-        time.sleep(0.1)  # Let thread start
 
         frame = np.zeros((240, 320, 3), dtype=np.uint8)
         det.submit(frame)
-        time.sleep(0.5)  # Let inference complete
 
-        result = det.latest()
+        result = poll_latest(det)
         assert result is not None
         dets, infer_ms = result
         assert isinstance(dets, list)
@@ -70,9 +79,8 @@ class TestAsyncDetectorInference:
 
         frame = np.random.randint(0, 255, (240, 320, 3), dtype=np.uint8)
         det.submit(frame)
-        time.sleep(0.5)
 
-        result = det.latest()
+        result = poll_latest(det)
         assert result is not None
         dets, _ = result
         for d in dets:
@@ -85,12 +93,12 @@ class TestAsyncDetectorInference:
 
         frame = np.random.randint(0, 255, (240, 320, 3), dtype=np.uint8)
         det.submit(frame)
-        time.sleep(0.5)
 
-        result = det.latest()
+        result = poll_latest(det)
         if result is not None:
             dets, _ = result
             from src.python.perception.detector import COCO_VEHICLE_CLASSES
+
             for d in dets:
                 assert d.class_id in COCO_VEHICLE_CLASSES
         det.stop()
@@ -99,16 +107,14 @@ class TestAsyncDetectorInference:
         """Submitting a new frame while busy should replace the pending frame."""
         det = AsyncDetector(MODEL_PATH)
         det.start()
-        time.sleep(0.1)
 
         # Submit two frames rapidly — second should overwrite first in pending
         frame1 = np.zeros((240, 320, 3), dtype=np.uint8)
         frame2 = np.full((240, 320, 3), 128, dtype=np.uint8)
         det.submit(frame1)
         det.submit(frame2)  # Overwrites pending
-        time.sleep(0.5)
 
         # Should not crash, result should be valid
-        result = det.latest()
+        result = poll_latest(det)
         assert result is not None
         det.stop()
