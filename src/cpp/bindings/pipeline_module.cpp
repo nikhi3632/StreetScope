@@ -2,6 +2,8 @@
 #include <pybind11/numpy.h>
 #include <pybind11/stl.h>
 #include <streetscope/frame_pipeline/frame_loop.h>
+#include <streetscope/inference/coreml_detector.h>
+#include <streetscope/inference/detection.h>
 #include <videotoolbox_decoder.h>
 
 #include <cstring>
@@ -136,4 +138,68 @@ PYBIND11_MODULE(streetscope_pipeline, m) {
         py::arg("seconds") = 0.01,
         "Pump the main thread's run loop. Must be called from the main thread. "
         "Required for AVPlayer when no Cocoa event loop is running.");
+
+    // --- Detection ---
+    py::class_<streetscope::Detection>(m, "Detection")
+        .def_readonly("x1", &streetscope::Detection::x1)
+        .def_readonly("y1", &streetscope::Detection::y1)
+        .def_readonly("x2", &streetscope::Detection::x2)
+        .def_readonly("y2", &streetscope::Detection::y2)
+        .def_readonly("confidence", &streetscope::Detection::confidence)
+        .def_readonly("class_id", &streetscope::Detection::class_id)
+        .def_property_readonly("class_name", [](const streetscope::Detection& d) {
+            return streetscope::coco_class_name(d.class_id);
+        })
+        .def_property_readonly("bbox", [](const streetscope::Detection& d) {
+            return py::make_tuple(d.x1, d.y1, d.x2, d.y2);
+        })
+        .def_property_readonly("area", &streetscope::Detection::area)
+        .def("__repr__", [](const streetscope::Detection& d) {
+            return "<Detection " + std::string(streetscope::coco_class_name(d.class_id)) +
+                   " conf=" + std::to_string(d.confidence) +
+                   " bbox=(" + std::to_string(d.x1) + "," + std::to_string(d.y1) +
+                   "," + std::to_string(d.x2) + "," + std::to_string(d.y2) + ")>";
+        });
+
+    // --- CoreMLDetector ---
+    py::class_<streetscope::CoreMLDetector>(m, "CoreMLDetector")
+        .def(py::init<const std::string&, float, float>(),
+            py::arg("model_path"),
+            py::arg("conf_threshold") = 0.25f,
+            py::arg("iou_threshold") = 0.45f)
+        .def("detect", [](streetscope::CoreMLDetector& self,
+                          py::array_t<uint8_t, py::array::c_style> frame,
+                          bool vehicles_only) {
+            auto buf = frame.request();
+            if (buf.ndim != 3 || buf.shape[2] != 3) {
+                throw std::invalid_argument("frame must be (H, W, 3) uint8");
+            }
+            auto h = static_cast<int>(buf.shape[0]);
+            auto w = static_cast<int>(buf.shape[1]);
+            return self.detect(static_cast<const uint8_t*>(buf.ptr), w, h, vehicles_only);
+        }, py::arg("frame"), py::arg("vehicles_only") = false,
+           "Run sync detection on a BGR frame. Returns list of Detection.")
+        .def("submit", [](streetscope::CoreMLDetector& self,
+                          py::array_t<uint8_t, py::array::c_style> frame,
+                          bool vehicles_only) {
+            auto buf = frame.request();
+            if (buf.ndim != 3 || buf.shape[2] != 3) {
+                throw std::invalid_argument("frame must be (H, W, 3) uint8");
+            }
+            auto h = static_cast<int>(buf.shape[0]);
+            auto w = static_cast<int>(buf.shape[1]);
+            self.submit(static_cast<const uint8_t*>(buf.ptr), w, h, vehicles_only);
+        }, py::arg("frame"), py::arg("vehicles_only") = false,
+           "Submit frame for async detection.")
+        .def("try_get_result", &streetscope::CoreMLDetector::try_get_result,
+            "Poll for async result. Returns DetectionResult or None.")
+        .def_property_readonly("conf_threshold", &streetscope::CoreMLDetector::conf_threshold)
+        .def_property_readonly("iou_threshold", &streetscope::CoreMLDetector::iou_threshold)
+        .def_property_readonly("input_size", &streetscope::CoreMLDetector::input_size);
+
+    // --- DetectionResult ---
+    py::class_<streetscope::DetectionResult>(m, "DetectionResult")
+        .def_readonly("detections", &streetscope::DetectionResult::detections)
+        .def_readonly("inference_ms", &streetscope::DetectionResult::inference_ms)
+        .def_readonly("frame_number", &streetscope::DetectionResult::frame_number);
 }

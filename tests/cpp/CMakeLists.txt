@@ -53,9 +53,29 @@ if(APPLE AND TARGET streetscope_frame_loop)
     endif()
 endif()
 
+if(APPLE AND TARGET streetscope_inference)
+    add_executable(test_inference
+        test_detection.cpp
+        test_letterbox.cpp
+        test_nms.cpp
+    )
+    target_link_libraries(test_inference PRIVATE
+        streetscope_inference streetscope_warnings GTest::gtest_main)
+    set_target_properties(test_inference PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
+    )
+    if(SANITIZE STREQUAL "auto" AND CMAKE_BUILD_TYPE STREQUAL "Debug")
+        target_compile_options(test_inference PRIVATE -fsanitize=address,undefined)
+        target_link_options(test_inference PRIVATE -fsanitize=address,undefined)
+    endif()
+endif()
+
 include(GoogleTest)
 gtest_discover_tests(test_simd)
 gtest_discover_tests(test_frame_pipeline)
 if(TARGET test_frame_loop)
     gtest_discover_tests(test_frame_loop)
+endif()
+if(TARGET test_inference)
+    gtest_discover_tests(test_inference DISCOVERY_TIMEOUT 30)
 endif()

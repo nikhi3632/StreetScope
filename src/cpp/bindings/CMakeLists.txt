@@ -19,6 +19,7 @@ if(APPLE AND TARGET streetscope_frame_loop)
     pybind11_add_module(streetscope_pipeline pipeline_module.cpp)
     target_link_libraries(streetscope_pipeline PRIVATE
         streetscope_frame_loop
+        streetscope_inference
         streetscope_warnings
     )
     set_target_properties(streetscope_pipeline PROPERTIES

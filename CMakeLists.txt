@@ -1,5 +1,9 @@
 cmake_minimum_required(VERSION 3.20)
-project(streetscope_cpp LANGUAGES CXX)
+if(APPLE)
+    project(streetscope_cpp LANGUAGES CXX OBJCXX)
+else()
+    project(streetscope_cpp LANGUAGES CXX)
+endif()
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -49,6 +53,23 @@ elseif(SANITIZE STREQUAL "thread")
     add_compile_options(-fsanitize=thread -fno-omit-frame-pointer)
     add_link_options(-fsanitize=thread)
 endif()
+
+# --- OpenCV (via FetchContent) ---
+include(FetchContent)
+set(BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(BUILD_PERF_TESTS OFF CACHE BOOL "" FORCE)
+set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(BUILD_DOCS OFF CACHE BOOL "" FORCE)
+set(BUILD_opencv_apps OFF CACHE BOOL "" FORCE)
+set(BUILD_opencv_python3 OFF CACHE BOOL "" FORCE)
+set(BUILD_opencv_java OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(
+    opencv
+    GIT_REPOSITORY https://github.com/opencv/opencv.git
+    GIT_TAG        4.13.0
+    GIT_SHALLOW    TRUE
+)
+FetchContent_MakeAvailable(opencv)
 
 # --- Include directories ---
 include_directories(${CMAKE_SOURCE_DIR}/include)

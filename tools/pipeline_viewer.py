@@ -36,6 +36,15 @@ from src.python.isp.estimator import AUTO_FOCUS_ALPHA_MAX, ISPEstimator, ISPPara
 from src.python.perception.detector import YoloDetector
 from src.python.perception.tracker import Tracker
 
+# Try native Core ML detector
+_native_detector = None
+try:
+    from streetscope_pipeline import CoreMLDetector as _NativeDetector
+
+    _native_detector = _NativeDetector
+except ImportError:
+    pass
+
 # Try to import SIMD module for accelerated ISP
 _simd_module = None
 try:
@@ -193,7 +202,12 @@ def run(url: str, model_path: str, vehicles_only: bool, conf: float, duration: i
 
     stabilizer = FrameStabilizer()
     bg_model = BackgroundModel()
-    detector = YoloDetector(model_path, conf_threshold=conf)
+    if _native_detector is not None:
+        detector = _native_detector(model_path, conf_threshold=conf)
+        detector_name = "native C++"
+    else:
+        detector = YoloDetector(model_path, conf_threshold=conf)
+        detector_name = "Python coremltools"
     # Warmup: first Core ML inference triggers compilation
     dummy = np.zeros((profile.height, profile.width, 3), dtype=np.uint8)
     detector.detect(dummy)
@@ -203,7 +217,7 @@ def run(url: str, model_path: str, vehicles_only: bool, conf: float, duration: i
     alpha_map: np.ndarray | None = None
     total_tracks = 0
 
-    print(f"Model: {model_path} (conf={conf}, warmed up)")
+    print(f"Model: {model_path} (conf={conf}, {detector_name}, warmed up)")
     print("Pipeline: detect → track")
     print("Quit: 'q'/Escape in window | close window | Ctrl+C")
     print()
