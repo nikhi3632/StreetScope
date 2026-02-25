@@ -37,29 +37,29 @@ from src.python.perception.detector import YoloDetector
 from src.python.perception.tracker import Tracker
 
 # Try native Core ML detector
-_native_detector = None
+native_detector = None
 try:
-    from streetscope_pipeline import CoreMLDetector as _NativeDetector
+    from streetscope_pipeline import CoreMLDetector
 
-    _native_detector = _NativeDetector
+    native_detector = CoreMLDetector
 except ImportError:
     pass
 
 # Try to import SIMD module for accelerated ISP
-_simd_module = None
+simd_module = None
 try:
     import streetscope_simd
 
-    _simd_module = streetscope_simd
+    simd_module = streetscope_simd
 except ImportError:
     pass
 
 # Try Metal tone mapper
-_metal_mapper_cls = None
+metal_mapper_cls = None
 try:
-    from streetscope_pipeline import MetalToneMapper as _MetalToneMapperCls
+    from streetscope_pipeline import MetalToneMapper
 
-    _metal_mapper_cls = _MetalToneMapperCls
+    metal_mapper_cls = MetalToneMapper
 except ImportError:
     pass
 
@@ -228,8 +228,8 @@ def run(
 
     stabilizer = FrameStabilizer()
     bg_model = BackgroundModel()
-    if _native_detector is not None:
-        detector = _native_detector(model_path, conf_threshold=conf)
+    if native_detector is not None:
+        detector = native_detector(model_path, conf_threshold=conf)
         detector_name = "native C++"
     else:
         detector = YoloDetector(model_path, conf_threshold=conf)
@@ -246,8 +246,8 @@ def run(
     # Metal tone mapper (replaces NEON AE+AWB when --metal is used)
     metal_mapper = None
     if use_metal:
-        if _metal_mapper_cls is not None:
-            metal_mapper = _metal_mapper_cls()
+        if metal_mapper_cls is not None:
+            metal_mapper = metal_mapper_cls()
             print("Metal tone mapping: enabled (GPU Reinhard)")
         else:
             print(
@@ -355,7 +355,7 @@ def run(
                             mask, display_frame = bg_model.update(stabilized, isp_params, alpha_map)
 
                             # Non-SIMD fallback: OpenCV path doesn't apply ISP
-                            if isp_params is not None and _simd_module is None:
+                            if isp_params is not None and simd_module is None:
                                 display_frame = ISPEstimator.apply(stabilized, isp_params)
 
                         # Metal tone mapping: replace NEON ISP display correction with GPU Reinhard
@@ -543,7 +543,7 @@ def run(
             print(f"      Gains [B,G,R]:   [{gains[0]:.3f}, {gains[1]:.3f}, {gains[2]:.3f}]")
             print("    Auto Focus (sharpening):")
             print(f"      Blur map range:  {bmap.min():.0f} / {bmap.max():.0f} min/max")
-            print(f"    SIMD accelerated:  {'yes' if _simd_module is not None else 'no'}")
+            print(f"    SIMD accelerated:  {'yes' if simd_module is not None else 'no'}")
             if metal_mapper is not None:
                 print("    Metal tone map:    yes (GPU Reinhard)")
         else:

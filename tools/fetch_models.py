@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""Download YOLO11s PyTorch weights.
+"""Download model weights (YOLO11s + Real-ESRGAN).
 
-Downloads yolo11s.pt from Ultralytics GitHub releases.
-To export to Core ML, run: python tools/export_pt2coreml.py
+Downloads PyTorch weights from GitHub releases.
+To export to Core ML, run:
+    python tools/export_pt2coreml.py yolo
+    python tools/export_pt2coreml.py realesrgan --variant x2plus
 
 Usage:
     python tools/fetch_models.py
@@ -13,8 +15,18 @@ import argparse
 import urllib.request
 from pathlib import Path
 
-PT_URL = "https://github.com/ultralytics/assets/releases/download/v8.4.0/yolo11s.pt"
-PT_FILENAME = "yolo11s.pt"
+MODELS = [
+    {
+        "url": "https://github.com/ultralytics/assets/releases/download/v8.4.0/yolo11s.pt",
+        "filename": "yolo11s.pt",
+        "description": "YOLO11s detection",
+    },
+    {
+        "url": "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.1/RealESRGAN_x2plus.pth",
+        "filename": "RealESRGAN_x2plus.pth",
+        "description": "Real-ESRGAN x2 super-resolution (23 RRDB blocks)",
+    },
+]
 
 
 def download(url: str, dest: Path) -> None:
@@ -38,7 +50,7 @@ def download(url: str, dest: Path) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Download YOLO11s weights")
+    parser = argparse.ArgumentParser(description="Download model weights")
     parser.add_argument(
         "--output-dir", default="models/", help="Directory to save models (default: models/)"
     )
@@ -47,19 +59,21 @@ def main() -> None:
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    pt_path = output_dir / PT_FILENAME
+    for model in MODELS:
+        dest = output_dir / model["filename"]
+        if dest.exists():
+            size_mb = dest.stat().st_size / (1024 * 1024)
+            print(f"Found {dest} ({size_mb:.1f} MB) — {model['description']}, skipping")
+        else:
+            print(f"\n{model['description']}:")
+            download(model["url"], dest)
 
-    if pt_path.exists():
-        size_mb = pt_path.stat().st_size / (1024 * 1024)
-        print(f"Found {pt_path} ({size_mb:.1f} MB), skipping download")
-    else:
-        download(PT_URL, pt_path)
-
-    mlpackage_path = output_dir / "yolo11s.mlpackage"
-    if not mlpackage_path.exists():
-        print()
-        print("Next step: export to Core ML")
-        print("  python tools/export_pt2coreml.py")
+    print()
+    print("Next steps (export to Core ML):")
+    if not (output_dir / "yolo11s.mlpackage").exists():
+        print("  python tools/export_pt2coreml.py yolo")
+    if not (output_dir / "realesrgan_x2plus.mlpackage").exists():
+        print("  python tools/export_pt2coreml.py realesrgan")
 
 
 if __name__ == "__main__":

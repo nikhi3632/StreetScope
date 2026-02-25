@@ -85,7 +85,8 @@ isp:
 	PYTHONPATH=build .venv/bin/python tools/isp_viewer.py --url "$(URL)"
 
 export-coreml:
-	.venv/bin/python tools/export_pt2coreml.py
+	.venv/bin/python tools/export_pt2coreml.py yolo
+	.venv/bin/python tools/export_pt2coreml.py realesrgan
 
 # ── Docker (sanitizer + Valgrind testing on Linux) ───────
 # OpenCV is skipped on Linux (all OpenCV-dependent code is macOS-only).
