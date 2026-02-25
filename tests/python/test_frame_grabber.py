@@ -7,25 +7,25 @@ from src.python.core.stream import FrameGrabber, FrameMetrics, StreamMetrics
 
 class TestFrameGrabberConstruction:
     def test_accepts_url(self):
-        fg = FrameGrabber("http://example.com/stream.m3u8")
+        fg = FrameGrabber("http://example.com/stream.m3u8", backend="opencv")
         assert fg.url == "http://example.com/stream.m3u8"
 
     def test_default_max_consecutive_failures(self):
-        fg = FrameGrabber("http://example.com/stream.m3u8")
+        fg = FrameGrabber("http://example.com/stream.m3u8", backend="opencv")
         assert fg.max_consecutive_failures == 30
 
 
 class TestFrameGrabberBeforeStart:
     def test_latest_returns_none_before_start(self):
-        fg = FrameGrabber("http://example.com/stream.m3u8")
+        fg = FrameGrabber("http://example.com/stream.m3u8", backend="opencv")
         assert fg.latest() is None
 
     def test_error_returns_none_before_start(self):
-        fg = FrameGrabber("http://example.com/stream.m3u8")
+        fg = FrameGrabber("http://example.com/stream.m3u8", backend="opencv")
         assert fg.error is None
 
     def test_metrics_returns_empty_before_start(self):
-        fg = FrameGrabber("http://example.com/stream.m3u8")
+        fg = FrameGrabber("http://example.com/stream.m3u8", backend="opencv")
         sm = fg.metrics
         assert isinstance(sm, StreamMetrics)
         assert sm.frames_decoded == 0
@@ -33,18 +33,18 @@ class TestFrameGrabberBeforeStart:
 
 class TestFrameGrabberStop:
     def test_stop_before_start_is_safe(self):
-        fg = FrameGrabber("http://example.com/stream.m3u8")
+        fg = FrameGrabber("http://example.com/stream.m3u8", backend="opencv")
         fg.stop()  # Should not raise
 
     def test_stop_is_idempotent(self):
-        fg = FrameGrabber("http://example.com/stream.m3u8")
+        fg = FrameGrabber("http://example.com/stream.m3u8", backend="opencv")
         fg.stop()
         fg.stop()  # Should not raise
 
 
 class TestFrameGrabberContextManager:
     def test_context_manager_calls_stop(self):
-        fg = FrameGrabber("http://example.com/stream.m3u8")
+        fg = FrameGrabber("http://example.com/stream.m3u8", backend="opencv")
         with fg:
             pass
         # Should have called stop without error
@@ -69,7 +69,7 @@ class TestFrameGrabberWithFakeStream:
 
         monkeypatch.setattr("src.python.core.stream.decode_frames", fake_decode_frames)
 
-        fg = FrameGrabber("http://fake")
+        fg = FrameGrabber("http://fake", backend="opencv")
         fg.start()
         time.sleep(0.1)  # Let thread run
 
@@ -98,7 +98,7 @@ class TestFrameGrabberWithFakeStream:
 
         monkeypatch.setattr("src.python.core.stream.decode_frames", fake_decode_frames)
 
-        fg = FrameGrabber("http://fake")
+        fg = FrameGrabber("http://fake", backend="opencv")
         fg.start()
         time.sleep(0.2)  # Let all frames through
         fg.stop()
@@ -125,7 +125,7 @@ class TestFrameGrabberWithFakeStream:
 
         monkeypatch.setattr("src.python.core.stream.decode_frames", fake_decode_frames)
 
-        fg = FrameGrabber("http://fake")
+        fg = FrameGrabber("http://fake", backend="opencv")
         fg.start()
         time.sleep(0.2)
         fg.stop()
@@ -142,7 +142,7 @@ class TestFrameGrabberWithFakeStream:
 
         monkeypatch.setattr("src.python.core.stream.decode_frames", fake_decode_frames)
 
-        fg = FrameGrabber("http://fake")
+        fg = FrameGrabber("http://fake", backend="opencv")
         fg.start()
         time.sleep(0.1)
 

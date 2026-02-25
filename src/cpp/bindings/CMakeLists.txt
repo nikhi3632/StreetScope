@@ -14,3 +14,14 @@ target_link_libraries(streetscope_simd PRIVATE streetscope_simd_core streetscope
 set_target_properties(streetscope_simd PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
 )
+
+if(APPLE AND TARGET streetscope_frame_loop)
+    pybind11_add_module(streetscope_pipeline pipeline_module.cpp)
+    target_link_libraries(streetscope_pipeline PRIVATE
+        streetscope_frame_loop
+        streetscope_warnings
+    )
+    set_target_properties(streetscope_pipeline PROPERTIES
+        LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
+    )
+endif()

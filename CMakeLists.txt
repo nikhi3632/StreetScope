@@ -55,6 +55,8 @@ include_directories(${CMAKE_SOURCE_DIR}/include)
 
 # --- Subdirectories ---
 add_subdirectory(src/cpp/simd)
+add_subdirectory(src/cpp/objcpp)
+add_subdirectory(src/cpp/frame_pipeline)
 enable_testing()
 add_subdirectory(tests/cpp)
 add_subdirectory(src/cpp/bindings)

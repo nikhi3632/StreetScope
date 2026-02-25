@@ -48,9 +48,7 @@ def export(input_path: str, output_path: str) -> None:
 def main():
     parser = argparse.ArgumentParser(description="Export YOLO11s to Core ML")
     parser.add_argument("--input", default="models/yolo11s.pt", help="Path to .pt weights")
-    parser.add_argument(
-        "--output", default="models/yolo11s.mlpackage", help="Output Core ML path"
-    )
+    parser.add_argument("--output", default="models/yolo11s.mlpackage", help="Output Core ML path")
     args = parser.parse_args()
     export(args.input, args.output)
 

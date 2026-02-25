@@ -184,8 +184,8 @@ class TestBackgroundModelSIMDIntegration:
         agreements = []
         for _ in range(20):
             frame = rng.randint(0, 256, (64, 64, 3), dtype=np.uint8)
-            mask_simd = model_simd.update(frame)
-            mask_cv = model_cv.update(frame)
+            mask_simd, _ = model_simd.update(frame)
+            mask_cv, _ = model_cv.update(frame)
             agreement = np.mean(mask_simd == mask_cv)
             agreements.append(agreement)
 
@@ -238,6 +238,153 @@ class TestApplyAEAWBVsGolden:
         lut = np.arange(256, dtype=np.uint8)
         result = streetscope_simd.apply_ae_awb(frame, lut, 2.0, 2.0, 2.0)
         assert result.max() == 255
+
+
+GOLDEN_DIR = Path(__file__).parent / "golden" / "process_frame"
+
+
+class TestProcessFrame:
+    """process_frame correctness: determinism, convergence, range, regression.
+
+    process_frame is what FrameLoop calls on every frame in production.
+    Tests verify observable properties, not internal kernel decomposition.
+    """
+
+    def test_determinism(self):
+        """Same input, same output. Every time."""
+        rng = np.random.RandomState(42)
+        h, w = 64, 64
+        frame = rng.randint(0, 256, (h, w, 3), dtype=np.uint8)
+        lut = np.arange(256, dtype=np.uint8)
+        alpha_map = np.full((h, w), 0.5, dtype=np.float32)
+
+        bg1 = rng.uniform(0, 255, (h, w, 3)).astype(np.float32)
+        bg2 = bg1.copy()
+
+        mask1, display1 = streetscope_simd.process_frame(
+            frame,
+            bg1,
+            alpha=0.05,
+            threshold=15,
+            lut=lut,
+            gain_b=0.8,
+            gain_g=1.0,
+            gain_r=1.3,
+            alpha_map=alpha_map,
+            blur_ksize=5,
+        )
+        mask2, display2 = streetscope_simd.process_frame(
+            frame,
+            bg2,
+            alpha=0.05,
+            threshold=15,
+            lut=lut,
+            gain_b=0.8,
+            gain_g=1.0,
+            gain_r=1.3,
+            alpha_map=alpha_map,
+            blur_ksize=5,
+        )
+
+        np.testing.assert_array_equal(bg1, bg2)
+        np.testing.assert_array_equal(mask1, mask2)
+        np.testing.assert_array_equal(display1, display2)
+
+    def test_convergence(self):
+        """Background plate stabilizes after 60 frames of a steady scene."""
+        rng = np.random.RandomState(42)
+        h, w = 64, 64
+        scene = rng.randint(100, 200, (h, w, 3), dtype=np.uint8)
+        bg = np.zeros((h, w, 3), dtype=np.float32)
+
+        for i in range(60):
+            noise = rng.randint(-5, 6, (h, w, 3), dtype=np.int16)
+            frame = np.clip(scene.astype(np.int16) + noise, 0, 255).astype(np.uint8)
+            alpha = 1.0 if i == 0 else 0.05
+            streetscope_simd.process_frame(frame, bg, alpha=alpha, threshold=15)
+
+        bg_u8 = bg.clip(0, 255).astype(np.uint8)
+        diff = np.abs(bg_u8.astype(np.float32) - scene.astype(np.float32))
+        assert diff.mean() < 10, f"Background didn't converge: mean diff {diff.mean():.1f}"
+
+    def test_range(self):
+        """All outputs stay in [0, 255]. Mask is binary. Background is finite."""
+        rng = np.random.RandomState(42)
+        h, w = 64, 64
+        bg = np.zeros((h, w, 3), dtype=np.float32)
+
+        indices = np.arange(256, dtype=np.float64)
+        lut = ((indices / 255.0) ** 0.5 * 255.0).clip(0, 255).astype(np.uint8)
+        alpha_map = rng.uniform(0, 1.5, (h, w)).astype(np.float32)
+
+        for i in range(30):
+            frame = rng.randint(0, 256, (h, w, 3), dtype=np.uint8)
+            alpha = 1.0 if i == 0 else 0.05
+            mask, display = streetscope_simd.process_frame(
+                frame,
+                bg,
+                alpha=alpha,
+                threshold=15,
+                lut=lut,
+                gain_b=1.5,
+                gain_g=1.0,
+                gain_r=1.5,
+                alpha_map=alpha_map,
+                blur_ksize=5,
+            )
+            assert mask.dtype == np.uint8
+            assert display.dtype == np.uint8
+            assert set(np.unique(mask)).issubset({0, 255})
+            assert np.all(np.isfinite(bg))
+
+    def test_no_isp_passthrough(self):
+        """With lut=None, display output equals the input frame."""
+        rng = np.random.RandomState(42)
+        frame = rng.randint(0, 256, (64, 64, 3), dtype=np.uint8)
+        bg = rng.uniform(0, 255, (64, 64, 3)).astype(np.float32)
+
+        _, display = streetscope_simd.process_frame(
+            frame,
+            bg,
+            alpha=0.05,
+            threshold=15,
+        )
+        np.testing.assert_array_equal(display, frame)
+
+    def test_regression_golden(self):
+        """Compare against saved known-good outputs."""
+        rng = np.random.RandomState(12345)
+        h, w = 64, 64
+        bg = np.zeros((h, w, 3), dtype=np.float32)
+
+        indices = np.arange(256, dtype=np.float64)
+        lut = ((indices / 255.0) ** 0.5 * 255.0).clip(0, 255).astype(np.uint8)
+        alpha_map = rng.uniform(0, 1.5, (h, w)).astype(np.float32)
+
+        for i in range(10):
+            frame = rng.randint(0, 256, (h, w, 3), dtype=np.uint8)
+            alpha = 1.0 if i == 0 else 0.05
+            mask, display = streetscope_simd.process_frame(
+                frame,
+                bg,
+                alpha=alpha,
+                threshold=15,
+                lut=lut,
+                gain_b=0.8,
+                gain_g=1.0,
+                gain_r=1.3,
+                alpha_map=alpha_map,
+                blur_ksize=5,
+            )
+            golden_mask = np.load(GOLDEN_DIR / f"mask_{i:02d}.npy")
+            golden_display = np.load(GOLDEN_DIR / f"display_{i:02d}.npy")
+            np.testing.assert_array_equal(mask, golden_mask, err_msg=f"Mask diverged at frame {i}")
+            np.testing.assert_array_equal(
+                display, golden_display, err_msg=f"Display diverged at frame {i}"
+            )
+
+        golden_bg = np.load(GOLDEN_DIR / "background.npy")
+        np.testing.assert_array_equal(bg, golden_bg, err_msg="Background plate diverged")
 
 
 class TestApplyAFBlendVsGolden:

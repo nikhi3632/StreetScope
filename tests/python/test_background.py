@@ -48,7 +48,7 @@ class TestFirstFrame:
     def test_first_frame_returns_all_static_mask(self):
         model = BackgroundModel()
         frame = np.full((4, 4, 3), 100, dtype=np.uint8)
-        mask = model.update(frame)
+        mask, _ = model.update(frame)
         # First frame: background == frame, so no motion
         assert mask.shape == (4, 4)
         assert mask.dtype == np.uint8
@@ -97,7 +97,7 @@ class TestMotionMask:
         for _ in range(10):
             model.update(frame)
         # Same frame -> no motion
-        mask = model.update(frame)
+        mask, _ = model.update(frame)
         assert np.all(mask == 0)
 
     def test_large_change_produces_motion(self):
@@ -110,7 +110,7 @@ class TestMotionMask:
         # Insert a bright block (large diff > threshold, big enough to survive morphology)
         moving_frame = bg_frame.copy()
         moving_frame[8:24, 8:24] = 200  # 16x16 block, diff = 100
-        mask = model.update(moving_frame)
+        mask, _ = model.update(moving_frame)
 
         # The bright block region should be marked as motion
         assert np.any(mask[10:22, 10:22] == 255)
@@ -127,7 +127,7 @@ class TestMotionMask:
         # Small change well below threshold
         noisy_frame = bg_frame.copy()
         noisy_frame[2:6, 2:6] = 110  # diff = 10, below threshold=30
-        mask = model.update(noisy_frame)
+        mask, _ = model.update(noisy_frame)
         assert np.all(mask == 0)
 
     def test_mask_is_binary(self):
@@ -139,7 +139,7 @@ class TestMotionMask:
 
         moving_frame = bg_frame.copy()
         moving_frame[4:12, 4:12] = 200
-        mask = model.update(moving_frame)
+        mask, _ = model.update(moving_frame)
         unique_vals = np.unique(mask)
         assert all(v in (0, 255) for v in unique_vals)
 
@@ -158,7 +158,7 @@ class TestMorphologicalCleanup:
         noisy_frame[1, 1] = [200, 200, 200]
         noisy_frame[5, 10] = [200, 200, 200]
         noisy_frame[12, 3] = [200, 200, 200]
-        mask = model.update(noisy_frame)
+        mask, _ = model.update(noisy_frame)
 
         # Isolated pixels should be removed by morphological cleanup
         assert np.sum(mask) == 0
@@ -172,7 +172,7 @@ class TestMorphologicalCleanup:
 
         moving_frame = bg_frame.copy()
         moving_frame[4:12, 4:12] = 200  # 8x8 solid block
-        mask = model.update(moving_frame)
+        mask, _ = model.update(moving_frame)
 
         # Core of the block should still be detected
         assert np.any(mask[5:11, 5:11] == 255)

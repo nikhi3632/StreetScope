@@ -143,7 +143,7 @@ def run(url: str, alpha: float, threshold: int, warmup: int, duration: int) -> N
                         last_fm = fm
 
                         # Background update (synchronous, < 1ms)
-                        mask = bg_model.update(frame)
+                        mask, _ = bg_model.update(frame)
                         last_mask = mask
 
                         sm = grabber.metrics

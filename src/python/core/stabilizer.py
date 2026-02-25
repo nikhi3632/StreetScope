@@ -207,41 +207,66 @@ class BackgroundModel:
             return self.alpha + (self.warmup_alpha - self.alpha) * (1.0 - progress)
         return self.alpha
 
-    def update(self, frame: np.ndarray) -> np.ndarray:
-        """Update background and return binary motion mask.
+    def update(
+        self, frame: np.ndarray, isp_params=None, alpha_map: np.ndarray | None = None
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Update background and return motion mask + display frame.
+
+        When isp_params is provided and SIMD is available, runs the full
+        pipeline (EMA + subtract + AE+AWB + AF blend) in a single C++ call.
 
         Args:
             frame: BGR uint8 image (H, W, 3).
+            isp_params: ISPParams from estimator, or None to skip ISP.
+            alpha_map: Per-pixel AF alpha (H, W) float32, or None to skip AF.
 
         Returns:
-            Binary mask (H, W) uint8. 255 = motion, 0 = static.
+            (mask, display) where mask is (H, W) uint8 and display is (H, W, 3) uint8.
         """
-        frame_f = frame.astype(np.float32)
         alpha = self.effective_alpha()
 
         if self.background_plate is None:
-            self.background_plate = frame_f.copy()
+            self.background_plate = frame.astype(np.float32).copy()
             self.frame_count = 1
             h, w = frame.shape[:2]
-            return np.zeros((h, w), dtype=np.uint8)
+            return np.zeros((h, w), dtype=np.uint8), frame.copy()
 
         if self._simd is not None:
-            # NEON path: C++ SIMD kernels via pybind11
-            self._simd.accumulate_ema(frame_f, self.background_plate, alpha=alpha)
-            self.frame_count += 1
-            bg_uint8 = self.background_plate.astype(np.uint8)
-            mask = self._simd.subtract_background(frame, bg_uint8, threshold=self.threshold)
+            if isp_params is not None:
+                gains = isp_params.auto_white_balance_gains
+                mask, display = self._simd.process_frame(
+                    frame,
+                    self.background_plate,
+                    alpha=alpha,
+                    threshold=self.threshold,
+                    lut=isp_params.auto_exposure_lut,
+                    gain_b=float(gains[0]),
+                    gain_g=float(gains[1]),
+                    gain_r=float(gains[2]),
+                    alpha_map=alpha_map,
+                    blur_ksize=5,
+                )
+            else:
+                mask, display = self._simd.process_frame(
+                    frame,
+                    self.background_plate,
+                    alpha=alpha,
+                    threshold=self.threshold,
+                )
         else:
             # OpenCV path (golden reference)
+            frame_f = frame.astype(np.float32)
             cv2.accumulateWeighted(frame_f, self.background_plate, alpha)
-            self.frame_count += 1
             bg_uint8 = self.background_plate.astype(np.uint8)
             diff = cv2.absdiff(frame, bg_uint8)
             gray_diff = cv2.cvtColor(diff, cv2.COLOR_BGR2GRAY)
             _, mask = cv2.threshold(gray_diff, self.threshold, 255, cv2.THRESH_BINARY)
+            display = frame.copy()
+
+        self.frame_count += 1
 
         # Morphological cleanup: open removes small noise, close fills small holes
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, self.kernel)
         mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, self.kernel)
 
-        return mask
+        return mask, display

@@ -32,7 +32,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from src.python.bootstrap.stream_discovery import probe_stream
 from src.python.core.stabilizer import BackgroundModel, FrameStabilizer
 from src.python.core.stream import FrameGrabber, StreamError, StreamMetrics
-from src.python.isp.estimator import ISPEstimator, ISPParams
+from src.python.isp.estimator import AUTO_FOCUS_ALPHA_MAX, ISPEstimator, ISPParams
 from src.python.perception.detector import YoloDetector
 from src.python.perception.tracker import Tracker
 
@@ -200,6 +200,7 @@ def run(url: str, model_path: str, vehicles_only: bool, conf: float, duration: i
     tracker = Tracker(frame_rate=int(profile.frame_rate))
     estimator = ISPEstimator()
     isp_params: ISPParams | None = None
+    alpha_map: np.ndarray | None = None
     total_tracks = 0
 
     print(f"Model: {model_path} (conf={conf}, warmed up)")
@@ -226,35 +227,95 @@ def run(url: str, model_path: str, vehicles_only: bool, conf: float, duration: i
                 # Get latest decoded frame (non-blocking)
                 result = grabber.latest()
                 if result is not None:
-                    frame, fm = result
+                    raw_result, fm = result
 
                     # Only process genuinely new frames
                     if fm.frame_number != last_frame_num:
                         last_frame_num = fm.frame_number
 
-                        # Stabilize frame (cancel camera shake)
-                        stabilized, _ = stabilizer.stabilize(frame)
+                        # Branch: C++ FrameLoop (decode+process in C++) vs legacy Python
+                        if hasattr(raw_result, "bgr"):
+                            # C++ FrameLoop path — ProcessedFrame with bgr/mask/display
+                            frame_bgr = raw_result.bgr
+                            mask = raw_result.mask
+                            display_frame = raw_result.display
+                            stabilized, _ = stabilizer.stabilize(frame_bgr)
 
-                        # Background model on stabilized frame
-                        mask = bg_model.update(stabilized)
+                            # Push ISP config for next frames (one-frame lag is fine)
+                            if isp_params is not None:
+                                gains = isp_params.auto_white_balance_gains
+                                grabber.push_config(
+                                    ema_alpha=bg_model.alpha,
+                                    motion_threshold=bg_model.threshold,
+                                    lut=isp_params.auto_exposure_lut,
+                                    gain_b=float(gains[0]),
+                                    gain_g=float(gains[1]),
+                                    gain_r=float(gains[2]),
+                                    alpha_map=alpha_map,
+                                    blur_ksize=5,
+                                )
+
+                            # Compute ISP params once (need ~30 frames of warmup)
+                            if isp_params is None and fm.frame_number > bg_model.warmup_frames:
+                                # FrameLoop handles the background plate internally;
+                                # compute ISP from a snapshot of the display frame
+                                bg_approx = display_frame.astype(np.float32)
+                                isp_params = estimator.estimate(bg_approx)
+                                bmax = float(isp_params.blur_map.max())
+                                if bmax >= 1e-6:
+                                    normalized = isp_params.blur_map / bmax
+                                    alpha_grid = ((1.0 - normalized) * AUTO_FOCUS_ALPHA_MAX).astype(
+                                        np.float32
+                                    )
+                                    fh, fw = frame_bgr.shape[:2]
+                                    alpha_map = cv2.resize(
+                                        alpha_grid, (fw, fh), interpolation=cv2.INTER_LINEAR
+                                    )
+                        else:
+                            # Legacy Python path
+                            frame = raw_result
+
+                            # Stabilize frame (cancel camera shake)
+                            stabilized, _ = stabilizer.stabilize(frame)
+
+                            # Compute ISP params once after warmup
+                            if isp_params is None and bg_model.is_warmed_up:
+                                isp_params = estimator.estimate(bg_model.background_plate)
+                                bmax = float(isp_params.blur_map.max())
+                                if bmax >= 1e-6:
+                                    normalized = isp_params.blur_map / bmax
+                                    alpha_grid = ((1.0 - normalized) * AUTO_FOCUS_ALPHA_MAX).astype(
+                                        np.float32
+                                    )
+                                    fh, fw = stabilized.shape[:2]
+                                    alpha_map = cv2.resize(
+                                        alpha_grid, (fw, fh), interpolation=cv2.INTER_LINEAR
+                                    )
+
+                            # Background model + fused ISP
+                            mask, display_frame = bg_model.update(stabilized, isp_params, alpha_map)
+
+                            # Non-SIMD fallback: OpenCV path doesn't apply ISP
+                            if isp_params is not None and _simd_module is None:
+                                display_frame = ISPEstimator.apply(stabilized, isp_params)
+
                         motion_pct = (
                             np.count_nonzero(mask) / mask.size * 100 if mask.size > 0 else 0
                         )
 
-                        # Synchronous detection on stabilized frame
+                        # Synchronous detection on frame
                         t0 = time.monotonic()
                         raw_dets = detector.detect(stabilized, vehicles_only=vehicles_only)
                         infer_ms = (time.monotonic() - t0) * 1000
                         infer_times.append(infer_ms)
                         frames_displayed += 1
 
-                        # Compute ISP params once after warmup
-                        if isp_params is None and bg_model.is_warmed_up:
-                            isp_params = estimator.estimate(bg_model.background_plate)
-
                         # Filter out stationary detections using motion mask
                         total_raw_detections += len(raw_dets)
-                        if bg_model.is_warmed_up:
+                        warmup_done = (
+                            hasattr(raw_result, "bgr") and fm.frame_number > bg_model.warmup_frames
+                        ) or (not hasattr(raw_result, "bgr") and bg_model.is_warmed_up)
+                        if warmup_done:
                             dets = filter_by_motion(raw_dets, mask)
                         else:
                             dets = raw_dets  # Pass all during warmup
@@ -281,18 +342,11 @@ def run(url: str, model_path: str, vehicles_only: bool, conf: float, duration: i
 
                         # Panel 1: raw original frame
                         # Panel 2: ISP-corrected stabilized + tracked objects
-                        display_frame = stabilized
-                        if isp_params is not None:
-                            if _simd_module is not None:
-                                display_frame = ISPEstimator.apply_simd(
-                                    stabilized, isp_params, _simd_module
-                                )
-                            else:
-                                display_frame = ISPEstimator.apply(stabilized, isp_params)
+                        original = stabilized  # raw frame for display
                         combined_frame = draw_combined(display_frame, tracked)
                         sm = grabber.metrics
                         display = build_display(
-                            frame,
+                            original,
                             combined_frame,
                             infer_ms,
                             sm,

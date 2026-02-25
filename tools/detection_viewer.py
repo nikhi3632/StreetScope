@@ -150,7 +150,7 @@ def run(
 
                         # Optional: background update (synchronous, < 1ms)
                         if bg_model is not None:
-                            mask = bg_model.update(frame)
+                            mask, _ = bg_model.update(frame)
 
                         # Synchronous detection
                         t0 = time.monotonic()

@@ -1,9 +1,10 @@
-"""HLS stream ingest via OpenCV. Decodes frames and yields them with timing metadata."""
+"""HLS stream ingest. Uses C++ VideoToolbox decoder when available, falls back to OpenCV."""
 
 import logging
 import threading
 import time
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 
 import cv2
 import numpy as np
@@ -163,11 +164,16 @@ class FrameGrabber:
     """
 
     def __init__(
-        self, url: str, max_consecutive_failures: int = 30, realtime: bool = False
+        self,
+        url: str,
+        max_consecutive_failures: int = 30,
+        realtime: bool = False,
+        backend: str = "auto",
     ) -> None:
         self.url = url
         self.max_consecutive_failures = max_consecutive_failures
         self.realtime = realtime
+        self.backend = backend
 
         self.lock = threading.Lock()
         self.stop_event = threading.Event()
@@ -176,6 +182,7 @@ class FrameGrabber:
         self.latest_frame: tuple[np.ndarray, FrameMetrics] | None = None
         self.error_value: BaseException | None = None
         self.stream_metrics = StreamMetrics()
+        self.frame_loop = None
 
     def start(self) -> None:
         """Start the decode thread."""
@@ -211,19 +218,103 @@ class FrameGrabber:
     def __exit__(self, *exc):
         self.stop()
 
+    def push_config(
+        self,
+        ema_alpha: float,
+        motion_threshold: int,
+        lut=None,
+        gain_b: float = 1.0,
+        gain_g: float = 1.0,
+        gain_r: float = 1.0,
+        alpha_map=None,
+        blur_ksize: int = 5,
+    ) -> None:
+        """Push ISP config to the C++ FrameLoop. No-op if not using FrameLoop."""
+        if self.frame_loop is not None:
+            self.frame_loop.update_config(
+                ema_alpha=ema_alpha,
+                motion_threshold=motion_threshold,
+                lut=lut,
+                gain_b=gain_b,
+                gain_g=gain_g,
+                gain_r=gain_r,
+                alpha_map=alpha_map,
+                blur_ksize=blur_ksize,
+            )
+
     def run(self) -> None:
         """Decode loop — runs in a daemon thread."""
         try:
-            for frame, fm in decode_frames(
-                self.url,
-                realtime=self.realtime,
-                max_consecutive_failures=self.max_consecutive_failures,
-            ):
-                if self.stop_event.is_set():
-                    break
-                with self.lock:
-                    self.latest_frame = (frame, fm)
-                    self.stream_metrics.update(fm)
+            frame_loop = self.try_frame_loop()
+            if frame_loop is not None:
+                self.run_frame_loop(frame_loop)
+            else:
+                self.run_python()
         except Exception as exc:
             with self.lock:
                 self.error_value = exc
+
+    def try_frame_loop(self):
+        """Return a FrameLoop instance if available and requested, else None."""
+        if self.backend == "opencv":
+            return None
+        try:
+            import streetscope_pipeline
+
+            return streetscope_pipeline.FrameLoop(self.url)
+        except ImportError:
+            return None
+
+    def run_frame_loop(self, frame_loop) -> None:
+        """Use C++ FrameLoop for decode + process_frame in one shot."""
+        logger.info("Using C++ FrameLoop for: %s", self.url)
+        frame_loop.start()
+        self.frame_loop = frame_loop
+        frame_num = 0
+        last_wall = time.monotonic()
+        try:
+            while not self.stop_event.is_set():
+                result = frame_loop.try_get_result()
+                if result is None:
+                    time.sleep(0.001)
+                    continue
+
+                # Extract numpy arrays on THIS (BG) thread. The .bgr/.mask/.display
+                # accessors do a destructive std::move; calling them from a different
+                # thread than the one that received the ProcessedFrame causes corruption.
+                extracted = SimpleNamespace(
+                    bgr=result.bgr,
+                    mask=result.mask,
+                    display=result.display,
+                )
+
+                now = time.monotonic()
+                interval_ms = (now - last_wall) * 1000.0 if frame_num > 0 else 0.0
+                fm = FrameMetrics(
+                    frame_number=result.frame_number,
+                    decode_latency_ms=0.0,
+                    arrival_interval_ms=interval_ms,
+                    timestamp_s=result.timestamp_s,
+                )
+                last_wall = now
+                frame_num += 1
+                with self.lock:
+                    self.latest_frame = (extracted, fm)
+                    self.stream_metrics.update(fm)
+        finally:
+            frame_loop.stop()
+            self.frame_loop = None
+            logger.info("FrameLoop stopped after %d frames", frame_num)
+
+    def run_python(self) -> None:
+        """Decode using Python cv2.VideoCapture (fallback)."""
+        for frame, fm in decode_frames(
+            self.url,
+            realtime=self.realtime,
+            max_consecutive_failures=self.max_consecutive_failures,
+        ):
+            if self.stop_event.is_set():
+                break
+            with self.lock:
+                self.latest_frame = (frame, fm)
+                self.stream_metrics.update(fm)
