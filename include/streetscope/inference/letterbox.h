@@ -1,6 +1,14 @@
 #pragma once
 #include <cstdint>
 
+// Tuning constants — from YOLO standard, not empirical:
+//
+// input_size    640    YOLOv8 model input (640x640). Defined by model architecture.
+// pad_color     114    Gray fill (114,114,114,255) for letterbox. YOLO convention
+//                      matching training augmentation. Not tunable.
+// pad_offset    0.1    Rounding bias for symmetric padding. Ensures integer padding
+//                      is balanced (top==bottom, left==right).
+
 namespace streetscope {
 
 struct LetterboxInfo {

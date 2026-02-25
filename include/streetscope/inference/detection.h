@@ -2,6 +2,12 @@
 #include <cstdint>
 #include <vector>
 
+// Constants — from COCO dataset standard, not empirical:
+//
+// COCO classes        80    Fixed by COCO dataset (YOLOv8 training set).
+// Vehicle class IDs   {1: bicycle, 2: car, 3: motorcycle, 5: bus, 7: truck}
+//                          COCO index mapping. Not tunable.
+
 namespace streetscope {
 
 struct Detection {

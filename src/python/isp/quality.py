@@ -3,6 +3,18 @@
 Measures noise level, compression blocking artifacts, blur severity,
 and dynamic range on the background plate. These metrics configure
 the ISP 3A estimator and enhancement kernel parameters.
+
+Tuning constants — from signal processing literature, not empirical:
+
+  laplacian_ksize     3    Laplacian kernel size. 3x3 is minimal; captures
+                           high-frequency detail without smoothing.
+  MAD_constant    1.4826   Donoho's median absolute deviation estimator.
+                           Converts MAD to standard deviation for Gaussian
+                           noise. Exact value: 1/Phi^{-1}(3/4). Not tunable.
+  block_size          8    JPEG/H.264 block size for blocking artifact detection.
+                           8x8 is the standard DCT block. Not tunable.
+  dynamic_range  [1, 99]   Percentiles for usable luminance range. 1st and 99th
+                           exclude outlier pixels (dead pixels, specular highlights).
 """
 
 from dataclasses import dataclass

@@ -38,6 +38,23 @@ class ISPParams:
         )
 
 
+# ---------------------------------------------------------------------------
+# Tuning constants — empirical
+#
+# AUTO_FOCUS_ALPHA_MAX  1.5    Max unsharp mask strength. Higher = more sharpening
+#                              in blurry regions. Empirical; >2.0 introduces halos.
+# AUTO_FOCUS_KSIZE      5      Gaussian kernel for detail extraction. Must be odd.
+#                              5 balances noise suppression vs detail preservation.
+# target_mean         128.0    AE target: mid-gray in 8-bit. Assumes scene should
+#                              average to 50% brightness. Wrong for night/high-key.
+# grid_size             8      Spatial grid for per-region blur estimation (8x8 tiles).
+# gamma clamp     [0.2, 5.0]   Prevents extreme AE correction. 0.2 = max darken,
+#                              5.0 = max brighten. Arbitrary safety bounds.
+# AWB gain clamp  [0.5, 2.0]   Prevents color shifts > 2x per channel. Gray-world
+#                              can produce wild gains on non-neutral scenes.
+# mean tolerance        5.0    Skip AE if mean luminance within ±5 of target.
+#                              Avoids unnecessary correction on well-exposed scenes.
+# ---------------------------------------------------------------------------
 AUTO_FOCUS_ALPHA_MAX = 1.5
 AUTO_FOCUS_KSIZE = 5
 

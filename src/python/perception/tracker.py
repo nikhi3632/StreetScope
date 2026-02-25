@@ -593,6 +593,37 @@ class Tracker:
     optical flow tracking, PCA appearance basis, and template correction.
     """
 
+    # -----------------------------------------------------------------------
+    # Tuning constants — empirical
+    #
+    # trail_duration         2.0    Seconds of trail history to display. 2s at 15fps
+    #                               = 30 points. Longer trails clutter; shorter lose context.
+    # match_iou             0.15    IoU threshold for greedy detection-to-track matching.
+    #                               15% is very loose — allows matching even when LK
+    #                               drifts significantly between detections. Tight (>0.3)
+    #                               would break matching for fast-moving small vehicles.
+    # ncc_kill              0.1     NCC below 10% = template completely lost. Track is
+    #                               marked low-quality and eligible for pruning.
+    # max_frames_without_det  30    ~2 seconds at 15fps. Tracks survive occlusion for
+    #                               2s via LK alone, then die. Longer risks ghost tracks.
+    #
+    # IC Affine (ic_affine_step):
+    # num_iters              20     Max Gauss-Newton iterations. 20 is conservative;
+    #                               most converge in 5-10. Cost is cheap per iteration.
+    # threshold            0.05     Convergence on ||delta_p||. 0.05px = sub-pixel.
+    #
+    # Appearance basis:
+    # n_components           4      PCA components. 4 captures major illumination
+    #                               variation without overfitting to noise.
+    # sample_cap            50      Max appearance samples per track. 50 covers
+    #                               ~3.3s of observation at 15fps.
+    # rebuild_interval       5      Rebuild PCA basis every 5 new samples.
+    #
+    # Track validation:
+    # min_det_size           4      Detections < 4x4px are too small to track reliably.
+    # area_ratio_bounds [0.25, 4.0] Sanity check: tracked area can shrink to 25% or
+    #                               grow to 400% of original. Beyond = diverged.
+    # -----------------------------------------------------------------------
     def __init__(
         self,
         frame_rate: int = 15,

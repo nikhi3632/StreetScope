@@ -19,6 +19,27 @@ class FrameStabilizer:
     warp is applied to align the current frame with the previous one.
     """
 
+    # -----------------------------------------------------------------------
+    # Tuning constants — empirical
+    #
+    # max_features    200    Max corners for LK. 200 is enough for outdoor traffic
+    #                        scenes; more adds compute, fewer risks losing lock.
+    # quality_level  0.01    Corner quality threshold (fraction of strongest corner).
+    #                        1% catches subtle features; lower = more noise corners.
+    # min_distance     10    Min pixel spacing between features. Prevents clustering
+    #                        on high-texture regions (e.g. bridge cables).
+    # win_size     (21,21)   LK search window. 21px handles ~10px inter-frame motion
+    #                        at 15fps. Larger = slower but tolerates more shake.
+    # max_level         3    Pyramid levels for LK. 3 levels = 8x downscale, handles
+    #                        large motions. Standard OpenCV default.
+    # ransac_thresh   3.0    Max reprojection error (pixels) for RANSAC inlier.
+    #                        3px tolerates sub-pixel flow noise.
+    # min_inlier_ratio 0.5   Require 50% inliers for valid affine. Below this,
+    #                        too many outliers (moving objects dominate frame).
+    # blockSize         7    Sobel window for corner detection. Odd, ≥3. 7 smooths
+    #                        noise while detecting structural corners.
+    # LK criteria  (30, 0.01)  Max 30 iterations or 0.01px convergence. Standard.
+    # -----------------------------------------------------------------------
     def __init__(
         self,
         max_features: int = 200,
@@ -159,6 +180,23 @@ class BackgroundModel:
     module is unavailable.
     """
 
+    # -----------------------------------------------------------------------
+    # Tuning constants — empirical
+    #
+    # alpha          0.05    EMA learning rate. 5% per frame = ~20 frame half-life.
+    #                        Slow enough for stable background, fast enough to adapt
+    #                        to lighting changes over seconds.
+    # threshold        15    Absolute pixel difference to classify as motion.
+    #                        15/255 ≈ 6% change. Tuned for 8-bit traffic cameras;
+    #                        too low = noise triggers motion, too high = misses slow cars.
+    # warmup_frames    60    ~4 seconds at 15fps. Background needs enough frames
+    #                        for EMA to converge. 60 frames at alpha=0.5 warmup
+    #                        gives >99.9% convergence.
+    # warmup_alpha    0.5    50% per frame during warmup. Aggressive learning to
+    #                        build initial background fast, then switch to 5%.
+    # kernel_size       5    5x5 morphological cleanup for salt-and-pepper noise
+    #                        in the motion mask. Standard; 3x3 leaves too much noise.
+    # -----------------------------------------------------------------------
     def __init__(
         self,
         alpha: float = 0.05,

@@ -73,6 +73,16 @@ class StreamMetrics:
         return 1000.0 / avg
 
 
+# ---------------------------------------------------------------------------
+# Tuning constants — empirical
+#
+# DEFAULT_FPS              15.0    Fallback if stream doesn't report FPS. NYSDOT
+#                                  traffic cameras typically run at 15fps.
+# RETRY_SLEEP_S           0.01    10ms sleep between read retries. Short enough
+#                                  to not miss frames, long enough to yield CPU.
+# max_consecutive_failures  30    Abort after 30 consecutive failures (~2s at 15fps).
+#                                  Distinguishes transient glitches from dead streams.
+# ---------------------------------------------------------------------------
 DEFAULT_FPS = 15.0
 RETRY_SLEEP_S = 0.01
 

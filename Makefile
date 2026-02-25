@@ -1,5 +1,5 @@
 .PHONY: test lint tidy fix format check build build-release install \
-       play detect detect-mask background pipeline capture benchmark-simd benchmark-coreml benchmark-metal isp export-coreml \
+       play detect detect-mask background pipeline pipeline-metal capture benchmark-simd benchmark-coreml benchmark-metal isp export-coreml \
        docker-build docker-asan docker-tsan docker-valgrind docker-all docker-shell docker-clean
 
 # ── Build ─────────────────────────────────────────────────
@@ -56,6 +56,9 @@ background:
 
 pipeline:
 	PYTHONPATH=build .venv/bin/python tools/pipeline_viewer.py --url "$(URL)" --vehicles-only
+
+pipeline-metal:
+	PYTHONPATH=build .venv/bin/python tools/pipeline_viewer.py --url "$(URL)" --vehicles-only --metal
 
 capture:
 	.venv/bin/python tools/capture_frames.py --url "$(URL)" --count 200

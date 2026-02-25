@@ -1,4 +1,19 @@
-"""YOLOv8 object detection via Core ML."""
+"""YOLOv8 object detection via Core ML.
+
+Tuning constants — from YOLO/COCO standard, not empirical:
+
+  input_size         640    YOLOv8 standard input dimension (640x640 square).
+                            Defined by the model architecture, not tunable.
+  letterbox_pad      114    Gray fill (114,114,114) for letterbox padding.
+                            YOLO convention — matches training augmentation.
+  pad_rounding_offset 0.1   ±0.1 rounding offset for symmetric padding.
+                            Ensures top==bottom and left==right padding.
+  conf_threshold    0.25    Default confidence cutoff. YOLO standard default.
+                            Lower catches more detections but adds noise.
+  iou_threshold     0.45    NMS IoU threshold. YOLO standard default.
+                            Higher keeps more overlapping boxes.
+  COCO classes        80    Fixed by COCO dataset. Vehicle subset: {1,2,3,5,7}.
+"""
 
 import threading
 import time

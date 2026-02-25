@@ -87,6 +87,10 @@ CLASS_COLORS = {
 DEFAULT_COLOR = (0, 200, 0)
 
 
+# Tuning constant — empirical
+# min_overlap  0.05    5% of bbox pixels must be in motion mask to count as moving.
+#                      Very loose — even a small motion signal keeps the detection.
+#                      Higher (>0.2) would filter slow-moving vehicles near stops.
 def filter_by_motion(detections, mask: np.ndarray, min_overlap: float = 0.05):
     """Keep only detections that overlap sufficiently with the motion mask.
 
@@ -291,16 +295,24 @@ def run(
                             # Push ISP config for next frames (one-frame lag is fine)
                             if isp_params is not None:
                                 gains = isp_params.auto_white_balance_gains
-                                grabber.push_config(
-                                    ema_alpha=bg_model.alpha,
-                                    motion_threshold=bg_model.threshold,
-                                    lut=isp_params.auto_exposure_lut,
-                                    gain_b=float(gains[0]),
-                                    gain_g=float(gains[1]),
-                                    gain_r=float(gains[2]),
-                                    alpha_map=alpha_map,
-                                    blur_ksize=5,
-                                )
+                                if metal_mapper is not None:
+                                    # Metal handles display correction — skip NEON gamma+AWB
+                                    # but keep EMA accumulator + background subtract running
+                                    grabber.push_config(
+                                        ema_alpha=bg_model.alpha,
+                                        motion_threshold=bg_model.threshold,
+                                    )
+                                else:
+                                    grabber.push_config(
+                                        ema_alpha=bg_model.alpha,
+                                        motion_threshold=bg_model.threshold,
+                                        lut=isp_params.auto_exposure_lut,
+                                        gain_b=float(gains[0]),
+                                        gain_g=float(gains[1]),
+                                        gain_r=float(gains[2]),
+                                        alpha_map=alpha_map,
+                                        blur_ksize=5,
+                                    )
 
                             # Compute ISP params once (need ~30 frames of warmup)
                             if isp_params is None and fm.frame_number > bg_model.warmup_frames:
@@ -349,11 +361,26 @@ def run(
                         # Metal tone mapping: replace NEON ISP display correction with GPU Reinhard
                         if metal_mapper is not None and isp_params is not None:
                             gains = isp_params.auto_white_balance_gains
+                            # Derive Reinhard params from scene statistics.
+                            # These are empirical mappings from scene statistics.
+                            gray = cv2.cvtColor(display_frame, cv2.COLOR_BGR2GRAY)
+                            mean_lum = float(gray.mean()) / 255.0
+                            # Exposure: push mean luminance toward 0.5 (mid-gray).
+                            # 0.5 target = same assumption as ISPEstimator's
+                            # target_mean=128. Bright scenes get exposure < 1,
+                            # dark scenes get exposure > 1.
+                            exposure = 0.5 / max(mean_lum, 0.01)
+                            # White point: 99th percentile luminance sets the
+                            # Reinhard highlight ceiling. Pixels above this get
+                            # compressed. 99th (not 95th) preserves most highlights;
+                            # only specular/blown pixels get rolled off.
+                            p99 = float(np.percentile(gray, 99)) / 255.0
+                            white_point = max(p99 * exposure, 1.0)
                             display_frame = metal_mapper.tone_map(
                                 display_frame,
-                                exposure=1.5,
-                                white_point=2.0,
-                                gamma=2.2,
+                                exposure=exposure,
+                                white_point=white_point,
+                                gamma=1.0,
                                 gain_b=float(gains[0]),
                                 gain_g=float(gains[1]),
                                 gain_r=float(gains[2]),

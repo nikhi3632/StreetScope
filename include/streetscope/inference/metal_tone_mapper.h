@@ -5,6 +5,11 @@
 
 namespace streetscope {
 
+/// GPU tone mapping via Metal compute shader (Extended Reinhard with fused AWB).
+///
+/// Params are scene-dependent — see tone_map.h for derivation notes.
+/// The shader assumes sRGB input from camera feeds. Set gamma=1.0 for
+/// camera sources (already gamma-encoded). Use gamma=2.2 only for linear input.
 class MetalToneMapper {
 public:
     struct Params {
