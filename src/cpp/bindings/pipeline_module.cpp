@@ -4,6 +4,7 @@
 #include <streetscope/frame_pipeline/frame_loop.h>
 #include <streetscope/inference/coreml_detector.h>
 #include <streetscope/inference/detection.h>
+#include <streetscope/inference/metal_tone_mapper.h>
 #include <videotoolbox_decoder.h>
 
 #include <cstring>
@@ -260,6 +261,75 @@ PYBIND11_MODULE(streetscope_pipeline, m) {
 #endif
     }, py::arg("width"), py::arg("height"),
        "Create an IOSurface-backed BGRA CVPixelBuffer capsule for benchmarking.");
+
+    // --- MetalToneMapper ---
+    py::class_<streetscope::MetalToneMapper>(m, "MetalToneMapper")
+        .def(py::init<>())
+        .def("tone_map", [](streetscope::MetalToneMapper& self,
+                            py::array_t<uint8_t, py::array::c_style> frame,
+                            float exposure, float white_point, float gamma,
+                            float gain_b, float gain_g, float gain_r) {
+            auto buf = frame.request();
+            if (buf.ndim != 3 || buf.shape[2] != 3) {
+                throw std::invalid_argument("frame must be (H, W, 3) uint8");
+            }
+            auto h = static_cast<int>(buf.shape[0]);
+            auto w = static_cast<int>(buf.shape[1]);
+            streetscope::MetalToneMapper::Params params{};
+            params.exposure = exposure;
+            params.white_point = white_point;
+            params.gamma = gamma;
+            params.gain_b = gain_b;
+            params.gain_g = gain_g;
+            params.gain_r = gain_r;
+            auto result = self.tone_map(
+                static_cast<const uint8_t*>(buf.ptr), w, h, params);
+            // Return as numpy (H, W, 3) via capsule
+            auto* heap = new std::vector<uint8_t>(std::move(result));
+            auto capsule = py::capsule(heap, [](void* p) {
+                delete static_cast<std::vector<uint8_t>*>(p);
+            });
+            return py::array_t<uint8_t>(
+                {h, w, 3}, {w * 3, 3, 1}, heap->data(), capsule);
+        },
+            py::arg("frame"),
+            py::arg("exposure") = 1.0f,
+            py::arg("white_point") = 1.0f,
+            py::arg("gamma") = 2.2f,
+            py::arg("gain_b") = 1.0f,
+            py::arg("gain_g") = 1.0f,
+            py::arg("gain_r") = 1.0f,
+            "Metal tone map a BGR frame. Returns BGR numpy array.")
+        .def("tone_map_pixelbuffer", [](streetscope::MetalToneMapper& self,
+                                         const py::capsule& pb_capsule,
+                                         float exposure, float white_point, float gamma,
+                                         float gain_b, float gain_g, float gain_r) {
+            auto* pb = pb_capsule.get_pointer<void>();
+            if (pb == nullptr) {
+                throw std::invalid_argument("pixel_buffer capsule is null");
+            }
+            streetscope::MetalToneMapper::Params params{};
+            params.exposure = exposure;
+            params.white_point = white_point;
+            params.gamma = gamma;
+            params.gain_b = gain_b;
+            params.gain_g = gain_g;
+            params.gain_r = gain_r;
+            void* result = self.tone_map_pixelbuffer(pb, params);
+            return py::capsule(result, "CVPixelBuffer", [](void* p) {
+#if __APPLE__
+                CVPixelBufferRelease(static_cast<CVPixelBufferRef>(p));
+#endif
+            });
+        },
+            py::arg("pixel_buffer"),
+            py::arg("exposure") = 1.0f,
+            py::arg("white_point") = 1.0f,
+            py::arg("gamma") = 2.2f,
+            py::arg("gain_b") = 1.0f,
+            py::arg("gain_g") = 1.0f,
+            py::arg("gain_r") = 1.0f,
+            "Metal tone map a CVPixelBuffer. Returns new CVPixelBuffer capsule.");
 
     // --- DetectionResult ---
     py::class_<streetscope::DetectionResult>(m, "DetectionResult")

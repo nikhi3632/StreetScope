@@ -20,6 +20,7 @@ if(APPLE AND TARGET streetscope_frame_loop)
     target_link_libraries(streetscope_pipeline PRIVATE
         streetscope_frame_loop
         streetscope_inference
+        streetscope_metal
         streetscope_warnings
     )
     set_target_properties(streetscope_pipeline PROPERTIES

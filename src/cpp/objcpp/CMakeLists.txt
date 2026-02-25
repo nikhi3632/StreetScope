@@ -42,4 +42,19 @@ if(APPLE)
         "-framework Foundation"
     )
     target_compile_options(streetscope_inference PRIVATE -fobjc-arc)
+
+    add_library(streetscope_metal STATIC
+        metal_tone_mapper.mm
+    )
+    target_include_directories(streetscope_metal PUBLIC
+        ${CMAKE_SOURCE_DIR}/src/cpp/objcpp
+    )
+    target_link_libraries(streetscope_metal PRIVATE streetscope_warnings)
+    target_link_libraries(streetscope_metal PUBLIC
+        streetscope_frame
+        "-framework Metal"
+        "-framework CoreVideo"
+        "-framework Foundation"
+    )
+    target_compile_options(streetscope_metal PRIVATE -fobjc-arc)
 endif()

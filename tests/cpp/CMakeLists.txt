@@ -11,6 +11,7 @@ add_executable(test_simd
     test_subtractor.cpp
     test_isp_correction.cpp
     test_pipeline.cpp
+    test_tone_map.cpp
 )
 target_link_libraries(test_simd PRIVATE streetscope_simd_core streetscope_warnings GTest::gtest_main)
 set_target_properties(test_simd PROPERTIES
@@ -53,6 +54,22 @@ if(APPLE AND TARGET streetscope_frame_loop)
     endif()
 endif()
 
+if(APPLE AND TARGET streetscope_metal)
+    add_executable(test_metal_tone_map
+        test_metal_tone_map.mm
+    )
+    target_link_libraries(test_metal_tone_map PRIVATE
+        streetscope_metal streetscope_simd_core streetscope_warnings
+        GTest::gtest_main
+        "-framework Metal"
+        "-framework CoreVideo"
+        "-framework Foundation"
+    )
+    set_target_properties(test_metal_tone_map PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
+    )
+endif()
+
 if(APPLE AND TARGET streetscope_inference)
     add_executable(test_inference
         test_detection.cpp
@@ -75,6 +92,12 @@ gtest_discover_tests(test_simd)
 gtest_discover_tests(test_frame_pipeline)
 if(TARGET test_frame_loop)
     gtest_discover_tests(test_frame_loop)
+endif()
+if(TARGET test_metal_tone_map)
+    gtest_discover_tests(test_metal_tone_map
+        DISCOVERY_TIMEOUT 30
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    )
 endif()
 if(TARGET test_inference)
     gtest_discover_tests(test_inference DISCOVERY_TIMEOUT 30)

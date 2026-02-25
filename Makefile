@@ -1,5 +1,5 @@
 .PHONY: test lint tidy fix format check build build-release install \
-       play detect detect-mask background pipeline capture benchmark-simd benchmark-coreml isp export-coreml \
+       play detect detect-mask background pipeline capture benchmark-simd benchmark-coreml benchmark-metal isp export-coreml \
        docker-build docker-asan docker-tsan docker-valgrind docker-all docker-shell docker-clean
 
 # ── Build ─────────────────────────────────────────────────
@@ -71,6 +71,12 @@ benchmark-coreml:
 	cmake -B build -DCMAKE_BUILD_TYPE=Release -DPython3_EXECUTABLE=.venv/bin/python
 	cmake --build build -j$(JOBS)
 	PYTHONPATH=build .venv/bin/python tools/benchmark_coreml.py
+
+benchmark-metal:
+	@echo "=== Release build ==="
+	cmake -B build -DCMAKE_BUILD_TYPE=Release -DPython3_EXECUTABLE=.venv/bin/python
+	cmake --build build -j$(JOBS)
+	PYTHONPATH=build .venv/bin/python tools/benchmark_metal.py
 
 isp:
 	PYTHONPATH=build .venv/bin/python tools/isp_viewer.py --url "$(URL)"

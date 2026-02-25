@@ -54,6 +54,15 @@ try:
 except ImportError:
     pass
 
+# Try Metal tone mapper
+_metal_mapper_cls = None
+try:
+    from streetscope_pipeline import MetalToneMapper as _MetalToneMapperCls
+
+    _metal_mapper_cls = _MetalToneMapperCls
+except ImportError:
+    pass
+
 WINDOW_NAME = "StreetScope - Pipeline"
 DEFAULT_MODEL_PATH = "models/yolo11s.mlpackage"
 
@@ -127,6 +136,7 @@ def build_display(
     num_dets: int,
     motion_pct: float,
     isp_active: bool = False,
+    metal_active: bool = False,
 ) -> np.ndarray:
     w = original.shape[1]
 
@@ -153,7 +163,12 @@ def build_display(
 
     # Metrics bar at bottom
     out_h = display.shape[0]
-    isp_tag = "ISP: on" if isp_active else "ISP: warmup"
+    if metal_active:
+        isp_tag = "ISP: Metal GPU"
+    elif isp_active:
+        isp_tag = "ISP: on"
+    else:
+        isp_tag = "ISP: warmup"
     line = (
         f"FPS: {sm.effective_fps:.1f}  "
         f"YOLO: {infer_ms:.1f}ms  "
@@ -167,7 +182,14 @@ def build_display(
     return display
 
 
-def run(url: str, model_path: str, vehicles_only: bool, conf: float, duration: int) -> None:
+def run(
+    url: str,
+    model_path: str,
+    vehicles_only: bool,
+    conf: float,
+    duration: int,
+    use_metal: bool = False,
+) -> None:
     global shutdown_requested
     shutdown_requested = False
 
@@ -216,6 +238,17 @@ def run(url: str, model_path: str, vehicles_only: bool, conf: float, duration: i
     isp_params: ISPParams | None = None
     alpha_map: np.ndarray | None = None
     total_tracks = 0
+
+    # Metal tone mapper (replaces NEON AE+AWB when --metal is used)
+    metal_mapper = None
+    if use_metal:
+        if _metal_mapper_cls is not None:
+            metal_mapper = _metal_mapper_cls()
+            print("Metal tone mapping: enabled (GPU Reinhard)")
+        else:
+            print(
+                "Warning: --metal requested but MetalToneMapper not available, falling back to NEON ISP"
+            )
 
     print(f"Model: {model_path} (conf={conf}, {detector_name}, warmed up)")
     print("Pipeline: detect → track")
@@ -313,6 +346,19 @@ def run(url: str, model_path: str, vehicles_only: bool, conf: float, duration: i
                             if isp_params is not None and _simd_module is None:
                                 display_frame = ISPEstimator.apply(stabilized, isp_params)
 
+                        # Metal tone mapping: replace NEON ISP display correction with GPU Reinhard
+                        if metal_mapper is not None and isp_params is not None:
+                            gains = isp_params.auto_white_balance_gains
+                            display_frame = metal_mapper.tone_map(
+                                display_frame,
+                                exposure=1.5,
+                                white_point=2.0,
+                                gamma=2.2,
+                                gain_b=float(gains[0]),
+                                gain_g=float(gains[1]),
+                                gain_r=float(gains[2]),
+                            )
+
                         motion_pct = (
                             np.count_nonzero(mask) / mask.size * 100 if mask.size > 0 else 0
                         )
@@ -368,6 +414,7 @@ def run(url: str, model_path: str, vehicles_only: bool, conf: float, duration: i
                             num_dets=len(dets),
                             motion_pct=motion_pct,
                             isp_active=isp_params is not None,
+                            metal_active=metal_mapper is not None and isp_params is not None,
                         )
                         cv2.imshow(WINDOW_NAME, display)
 
@@ -470,6 +517,8 @@ def run(url: str, model_path: str, vehicles_only: bool, conf: float, duration: i
             print("    Auto Focus (sharpening):")
             print(f"      Blur map range:  {bmap.min():.0f} / {bmap.max():.0f} min/max")
             print(f"    SIMD accelerated:  {'yes' if _simd_module is not None else 'no'}")
+            if metal_mapper is not None:
+                print("    Metal tone map:    yes (GPU Reinhard)")
         else:
             print("    Not computed (warmup incomplete)")
         print()
@@ -498,13 +547,16 @@ def main():
     parser.add_argument(
         "--duration", type=int, default=0, help="Duration in seconds (0 = unlimited)"
     )
+    parser.add_argument(
+        "--metal", action="store_true", help="Use Metal GPU tone mapping instead of NEON ISP"
+    )
     args = parser.parse_args()
 
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
 
     try:
-        run(args.url, args.model, args.vehicles_only, args.conf, args.duration)
+        run(args.url, args.model, args.vehicles_only, args.conf, args.duration, args.metal)
     except Exception as e:
         logging.getLogger(__name__).error("Fatal: %s", e)
         sys.exit(1)
