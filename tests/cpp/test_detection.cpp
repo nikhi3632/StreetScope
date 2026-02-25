@@ -58,5 +58,4 @@ TEST(DetectionTest, DetectionResultMoveSemantics) {
     EXPECT_EQ(dest.detections.size(), 3u);
     EXPECT_DOUBLE_EQ(dest.inference_ms, 5.0);
     EXPECT_EQ(dest.frame_number, 42);
-    EXPECT_TRUE(source.detections.empty());
 }

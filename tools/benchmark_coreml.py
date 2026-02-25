@@ -67,6 +67,27 @@ def benchmark_native():
     return times
 
 
+def benchmark_zero_copy():
+    from streetscope_pipeline import CoreMLDetector, create_test_pixelbuffer
+
+    detector = CoreMLDetector(MODEL_PATH, conf_threshold=0.25)
+
+    # Pre-allocate IOSurface-backed CVPixelBuffer capsules (auto-released by GC)
+    pbs = [create_test_pixelbuffer(FRAME_W, FRAME_H) for _ in range(N_ITERATIONS)]
+
+    # Warmup
+    for i in range(N_WARMUP):
+        detector.detect_pixelbuffer(pbs[i], vehicles_only=True)
+
+    times = []
+    for pb in pbs:
+        t0 = time.monotonic()
+        detector.detect_pixelbuffer(pb, vehicles_only=True)
+        times.append((time.monotonic() - t0) * 1000)
+
+    return times
+
+
 def report(name, times):
     arr = np.array(times)
     print(f"  {name}:")
@@ -87,13 +108,24 @@ def main():
     print()
 
     try:
-        print("Running Native (C++ CoreML)...")
+        print("Running Native (C++ CoreML, BGR path)...")
         native_times = benchmark_native()
-        report("Native", native_times)
+        report("Native BGR", native_times)
         print()
 
-        speedup = np.mean(py_times) / np.mean(native_times)
-        print(f"Speedup: {speedup:.2f}x")
+        print("Running Native (C++ CoreML, zero-copy CVPixelBuffer)...")
+        zc_times = benchmark_zero_copy()
+        report("Native ZeroCopy", zc_times)
+        print()
+
+        py_mean = np.mean(py_times)
+        native_mean = np.mean(native_times)
+        zc_mean = np.mean(zc_times)
+
+        print(
+            f"Speedup vs Python:  BGR={py_mean / native_mean:.2f}x  ZeroCopy={py_mean / zc_mean:.2f}x"
+        )
+        print(f"ZeroCopy vs BGR:    {native_mean / zc_mean:.2f}x")
     except ImportError:
         print("Native detector not available (streetscope_pipeline not built)")
     except Exception as e:

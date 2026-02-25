@@ -79,9 +79,9 @@ export-coreml:
 	.venv/bin/python tools/export_pt2coreml.py
 
 # ── Docker (sanitizer + Valgrind testing on Linux) ───────
-# Toolchain image with source mounted at runtime.
-# ASan, TSan, and Valgrind need different builds, so each
-# target reconfigures build-docker/ as needed.
+# OpenCV is skipped on Linux (all OpenCV-dependent code is macOS-only).
+# Only our SIMD/frame code + GoogleTest build — takes ~30s not ~10min.
+# Sanitizer flags are per-target (streetscope_warnings interface library).
 DOCKER_IMAGE = streetscope-test
 DOCKER_RUN   = docker run --rm -v $(CURDIR):/app -w /app $(DOCKER_IMAGE)
 
@@ -96,7 +96,7 @@ docker-asan:
 	$(DOCKER_RUN) sh -c '\
 		cmake -B build-docker -DCMAKE_BUILD_TYPE=Debug -DSANITIZE=ON \
 			-DPython3_EXECUTABLE=$$(which python3) \
-		&& cmake --build build-docker \
+		&& cmake --build build-docker -j$(JOBS) \
 		&& ASAN_OPTIONS=abort_on_error=1 \
 		ctest --test-dir build-docker --output-on-failure'
 
@@ -107,7 +107,7 @@ docker-tsan:
 	$(DOCKER_RUN) sh -c '\
 		cmake -B build-docker -DCMAKE_BUILD_TYPE=Debug -DSANITIZE=thread \
 			-DPython3_EXECUTABLE=$$(which python3) \
-		&& cmake --build build-docker \
+		&& cmake --build build-docker -j$(JOBS) \
 		&& TSAN_OPTIONS=second_deadlock_stack=1:suppressions=/app/tsan.supp \
 		ctest --test-dir build-docker --output-on-failure'
 
@@ -119,7 +119,7 @@ docker-valgrind:
 	$(DOCKER_RUN) sh -c '\
 		cmake -B build-docker -DCMAKE_BUILD_TYPE=Debug -DSANITIZE=OFF \
 			-DPython3_EXECUTABLE=$$(which python3) \
-		&& cmake --build build-docker \
+		&& cmake --build build-docker -j$(JOBS) \
 		&& for bin in build-docker/test_*; do \
 			case "$$bin" in *.cmake|*.txt) continue ;; esac; \
 			[ -x "$$bin" ] && [ -f "$$bin" ] || continue; \
@@ -129,7 +129,6 @@ docker-valgrind:
 		done'
 
 # Run all sanitizers: Valgrind (no sanitizers) → TSan → ASan+LSan.
-# Each reconfigures build-docker/ since they're mutually exclusive.
 docker-all: docker-valgrind docker-tsan docker-asan
 
 docker-shell:

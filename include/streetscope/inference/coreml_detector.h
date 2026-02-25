@@ -24,6 +24,11 @@ public:
     std::vector<Detection> detect(const uint8_t* bgr, int w, int h,
                                   bool vehicles_only = false);
 
+    /// Zero-copy: letterbox + infer from CVPixelBuffer (void* = CVPixelBufferRef).
+    /// Stays in unified memory — no BGR extraction. For C++ pipeline use.
+    std::vector<Detection> detect_pixelbuffer(void* cv_pixel_buffer,
+                                              bool vehicles_only = false);
+
     /// Async: submit frame for background inference.
     void submit(const uint8_t* bgr, int w, int h,
                 bool vehicles_only = false);

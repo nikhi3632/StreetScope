@@ -29,7 +29,7 @@ endif()
 add_executable(test_frame_pipeline
     test_ring_buffer.cpp
 )
-target_link_libraries(test_frame_pipeline PRIVATE streetscope_warnings GTest::gtest_main)
+target_link_libraries(test_frame_pipeline PRIVATE streetscope_frame streetscope_warnings GTest::gtest_main)
 set_target_properties(test_frame_pipeline PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
 )

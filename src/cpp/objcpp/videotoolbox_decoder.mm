@@ -168,6 +168,10 @@ struct VideoToolboxDecoder::Impl {
 
         CVPixelBufferUnlockBaseAddress(pb, kCVPixelBufferLock_ReadOnly);
 
+        // Retain CVPixelBuffer for zero-copy detection path
+        CVPixelBufferRetain(pb);
+        frame.pixel_buffer = pb;
+
         ring.try_push(std::move(frame));  // Drop if full
     }
 };

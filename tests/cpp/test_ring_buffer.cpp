@@ -5,6 +5,16 @@
 #include <thread>
 #include <vector>
 
+// Detect Valgrind at runtime (header only available in Docker/Linux)
+#ifdef __has_include
+#if __has_include(<valgrind/valgrind.h>)
+#include <valgrind/valgrind.h>
+#endif
+#endif
+#ifndef RUNNING_ON_VALGRIND
+#define RUNNING_ON_VALGRIND 0
+#endif
+
 using streetscope::RingBuffer;
 using streetscope::DecodedFrame;
 
@@ -100,7 +110,8 @@ TEST(RingBuffer, MoveSemantics) {
 // --- Threaded SPSC stress test ---
 
 TEST(RingBuffer, ProducerConsumerThreaded) {
-    static constexpr int kItems = 100000;
+    // Fewer iterations under Valgrind (atomics are ~100x slower)
+    const int kItems = RUNNING_ON_VALGRIND ? 1000 : 100000;
     RingBuffer<int, 1024> rb;
     std::atomic<int> consumed{0};
     std::vector<int> received;

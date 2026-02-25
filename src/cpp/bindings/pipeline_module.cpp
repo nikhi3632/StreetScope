@@ -9,6 +9,10 @@
 #include <cstring>
 #include <stdexcept>
 
+#if __APPLE__
+#include <CoreVideo/CoreVideo.h>
+#endif
+
 namespace py = pybind11;
 using streetscope::FrameLoop;
 using streetscope::FrameLoopConfig;
@@ -191,11 +195,71 @@ PYBIND11_MODULE(streetscope_pipeline, m) {
             self.submit(static_cast<const uint8_t*>(buf.ptr), w, h, vehicles_only);
         }, py::arg("frame"), py::arg("vehicles_only") = false,
            "Submit frame for async detection.")
+        .def("detect_pixelbuffer", [](streetscope::CoreMLDetector& self,
+                                       const py::capsule& pb_capsule, bool vehicles_only) {
+            auto* pb = pb_capsule.get_pointer<void>();
+            if (pb == nullptr) {
+                throw std::invalid_argument("pixel_buffer capsule is null");
+            }
+            return self.detect_pixelbuffer(pb, vehicles_only);
+        }, py::arg("pixel_buffer"), py::arg("vehicles_only") = false,
+           "Zero-copy detection from CVPixelBuffer capsule.")
         .def("try_get_result", &streetscope::CoreMLDetector::try_get_result,
             "Poll for async result. Returns DetectionResult or None.")
         .def_property_readonly("conf_threshold", &streetscope::CoreMLDetector::conf_threshold)
         .def_property_readonly("iou_threshold", &streetscope::CoreMLDetector::iou_threshold)
         .def_property_readonly("input_size", &streetscope::CoreMLDetector::input_size);
+
+    // --- CVPixelBuffer test helper (for benchmark) ---
+    m.def("create_test_pixelbuffer", [](int width, int height) -> py::capsule {
+#if __APPLE__
+        // Build IOSurface-backed attributes using pure C CoreFoundation
+        CFDictionaryRef iosurface_props = CFDictionaryCreate(
+            kCFAllocatorDefault, nullptr, nullptr, 0,
+            &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+        const void* keys[] = { kCVPixelBufferIOSurfacePropertiesKey };
+        const void* vals[] = { iosurface_props };
+        CFDictionaryRef attrs = CFDictionaryCreate(
+            kCFAllocatorDefault, keys, vals, 1,
+            &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+
+        CVPixelBufferRef pb = nullptr;
+        CVReturn status = CVPixelBufferCreate(
+            kCFAllocatorDefault,
+            static_cast<size_t>(width), static_cast<size_t>(height),
+            kCVPixelFormatType_32BGRA,
+            attrs,
+            &pb
+        );
+        CFRelease(attrs);
+        CFRelease(iosurface_props);
+        if (status != kCVReturnSuccess || pb == nullptr) {
+            throw std::runtime_error("Failed to create test CVPixelBuffer");
+        }
+
+        // Fill with gradient pattern
+        CVPixelBufferLockBaseAddress(pb, 0);
+        auto* base = static_cast<uint8_t*>(CVPixelBufferGetBaseAddress(pb));
+        size_t bpr = CVPixelBufferGetBytesPerRow(pb);
+        for (int y = 0; y < height; y++) {
+            auto* row = base + static_cast<size_t>(y) * bpr;
+            for (int x = 0; x < width; x++) {
+                row[x * 4 + 0] = static_cast<uint8_t>(x & 0xFF);
+                row[x * 4 + 1] = static_cast<uint8_t>(y & 0xFF);
+                row[x * 4 + 2] = static_cast<uint8_t>((x + y) & 0xFF);
+                row[x * 4 + 3] = 255;
+            }
+        }
+        CVPixelBufferUnlockBaseAddress(pb, 0);
+
+        return py::capsule(pb, "CVPixelBuffer", [](void* p) {
+            CVPixelBufferRelease(static_cast<CVPixelBufferRef>(p));
+        });
+#else
+        throw std::runtime_error("CVPixelBuffer only available on macOS");
+#endif
+    }, py::arg("width"), py::arg("height"),
+       "Create an IOSurface-backed BGRA CVPixelBuffer capsule for benchmarking.");
 
     // --- DetectionResult ---
     py::class_<streetscope::DetectionResult>(m, "DetectionResult")

@@ -9,6 +9,7 @@ if(APPLE)
     )
     target_link_libraries(streetscope_decoder PRIVATE streetscope_warnings)
     target_link_libraries(streetscope_decoder PUBLIC
+        streetscope_frame
         "-framework AVFoundation"
         "-framework CoreMedia"
         "-framework CoreVideo"
@@ -33,7 +34,9 @@ if(APPLE)
     )
     target_link_libraries(streetscope_inference PRIVATE streetscope_warnings)
     target_link_libraries(streetscope_inference PUBLIC
+        streetscope_frame
         opencv_core opencv_imgproc
+        "-framework Accelerate"
         "-framework CoreML"
         "-framework CoreVideo"
         "-framework Foundation"

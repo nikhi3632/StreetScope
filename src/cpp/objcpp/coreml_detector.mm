@@ -7,6 +7,7 @@
 #import <CoreVideo/CoreVideo.h>
 #import <Foundation/Foundation.h>
 
+#include <Accelerate/Accelerate.h>
 #include <chrono>
 #include <dispatch/dispatch.h>
 #include <stdexcept>
@@ -220,6 +221,55 @@ struct CoreMLDetector::Impl {
         return nms(candidates, iou_thresh);
     }
 
+    /// Fill destination CVPixelBuffer from source CVPixelBuffer using vImage letterbox.
+    /// Both buffers stay in unified memory — no CPU pixel extraction.
+    void fill_pixel_buffer_from_cvpb(CVPixelBufferRef dst, CVPixelBufferRef src,
+                                      LetterboxInfo& info_out) {
+        auto src_w = static_cast<int>(CVPixelBufferGetWidth(src));
+        auto src_h = static_cast<int>(CVPixelBufferGetHeight(src));
+        info_out = compute_letterbox(src_w, src_h, kInputSize);
+
+        CVPixelBufferLockBaseAddress(src, kCVPixelBufferLock_ReadOnly);
+        CVPixelBufferLockBaseAddress(dst, 0);
+
+        auto* dst_base = static_cast<uint8_t*>(CVPixelBufferGetBaseAddress(dst));
+        size_t dst_row_bytes = CVPixelBufferGetBytesPerRow(dst);
+
+        // Fill destination with gray padding (BGRA: 114,114,114,255 = 0xFF727272)
+        auto* dst32 = reinterpret_cast<uint32_t*>(dst_base);
+        size_t total_pixels = static_cast<size_t>(kInputSize) * kInputSize;
+        constexpr uint32_t kGrayBGRA = 0xFF727272;
+        for (size_t i = 0; i < total_pixels; i++) {
+            dst32[i] = kGrayBGRA;
+        }
+
+        // Source vImage buffer
+        vImage_Buffer src_buf = {
+            .data = CVPixelBufferGetBaseAddress(src),
+            .height = static_cast<vImagePixelCount>(src_h),
+            .width = static_cast<vImagePixelCount>(src_w),
+            .rowBytes = CVPixelBufferGetBytesPerRow(src)
+        };
+
+        // Destination sub-region: offset into the padded area
+        int pad_top = static_cast<int>(std::round(info_out.pad_h - 0.1f));
+        int pad_left = static_cast<int>(std::round(info_out.pad_w - 0.1f));
+
+        vImage_Buffer dst_sub = {
+            .data = dst_base + static_cast<size_t>(pad_top) * dst_row_bytes
+                             + static_cast<size_t>(pad_left) * 4,
+            .height = static_cast<vImagePixelCount>(info_out.new_h),
+            .width = static_cast<vImagePixelCount>(info_out.new_w),
+            .rowBytes = dst_row_bytes
+        };
+
+        // Bilinear scale source BGRA into destination sub-region
+        vImageScale_ARGB8888(&src_buf, &dst_sub, nullptr, kvImageNoFlags);
+
+        CVPixelBufferUnlockBaseAddress(dst, 0);
+        CVPixelBufferUnlockBaseAddress(src, kCVPixelBufferLock_ReadOnly);
+    }
+
     /// Full sync pipeline: letterbox -> infer -> postprocess.
     std::vector<Detection> detect(
         const uint8_t* bgr, int w, int h, bool vehicles_only
@@ -230,6 +280,22 @@ struct CoreMLDetector::Impl {
             fill_pixel_buffer(pb, bgr, w, h, info);
             MLMultiArray* output = infer(pb);
             return postprocess(output, info, w, h, vehicles_only);
+        }
+    }
+
+    /// Zero-copy: CVPixelBuffer -> vImage letterbox -> infer -> postprocess.
+    std::vector<Detection> detect_pixelbuffer(
+        CVPixelBufferRef src_pb, bool vehicles_only
+    ) {
+        @autoreleasepool {
+            auto orig_w = static_cast<int>(CVPixelBufferGetWidth(src_pb));
+            auto orig_h = static_cast<int>(CVPixelBufferGetHeight(src_pb));
+
+            CVPixelBufferRef dst_pb = pixel_buffers[0];
+            LetterboxInfo info{};
+            fill_pixel_buffer_from_cvpb(dst_pb, src_pb, info);
+            MLMultiArray* output = infer(dst_pb);
+            return postprocess(output, info, orig_w, orig_h, vehicles_only);
         }
     }
 
@@ -278,6 +344,13 @@ std::vector<Detection> CoreMLDetector::detect(
     const uint8_t* bgr, int w, int h, bool vehicles_only
 ) {
     return impl_->detect(bgr, w, h, vehicles_only);
+}
+
+std::vector<Detection> CoreMLDetector::detect_pixelbuffer(
+    void* cv_pixel_buffer, bool vehicles_only
+) {
+    return impl_->detect_pixelbuffer(
+        static_cast<CVPixelBufferRef>(cv_pixel_buffer), vehicles_only);
 }
 
 void CoreMLDetector::submit(
