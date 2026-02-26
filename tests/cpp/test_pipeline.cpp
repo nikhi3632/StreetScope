@@ -9,7 +9,23 @@
 
 using namespace streetscope::simd;
 
-class PipelineNoISPTest : public ::testing::Test {
+// Helper: build a PipelineConfig with identity ISP (pass-through)
+static PipelineConfig make_identity_config(int width, int height, float ema_alpha, uint8_t threshold) {
+    PipelineConfig config{};
+    config.ema_alpha = ema_alpha;
+    config.motion_threshold = threshold;
+    config.width = width;
+    config.height = height;
+    for (int i = 0; i < 256; i++) config.ae_awb.lut[i] = static_cast<uint8_t>(i);
+    config.ae_awb.gain_b = 1.0f;
+    config.ae_awb.gain_g = 1.0f;
+    config.ae_awb.gain_r = 1.0f;
+    config.ae_awb.width = width;
+    config.ae_awb.height = height;
+    return config;
+}
+
+class PipelineIdentityISPTest : public ::testing::Test {
 protected:
     static constexpr int kWidth = 16;
     static constexpr int kHeight = 8;
@@ -19,14 +35,14 @@ protected:
     static constexpr uint8_t kThreshold = 15;
 };
 
-TEST_F(PipelineNoISPTest, MaskMatchesSeparateKernels) {
+TEST_F(PipelineIdentityISPTest, MaskMatchesSeparateKernels) {
     // Create a frame with some variation
     std::vector<uint8_t> frame(kBytes);
     for (int i = 0; i < kBytes; i++) {
         frame[i] = static_cast<uint8_t>((i * 7 + 13) % 256);
     }
 
-    // Background starts as copy of frame (will diverge after EMA)
+    // Background starts different from frame
     std::vector<float> bg_fused(kBytes);
     std::vector<float> bg_separate(kBytes);
     for (int i = 0; i < kBytes; i++) {
@@ -34,21 +50,17 @@ TEST_F(PipelineNoISPTest, MaskMatchesSeparateKernels) {
         bg_separate[i] = bg_fused[i];
     }
 
-    // Fused path
+    // Fused path: identity ISP + zero alpha map = display equals frame
     std::vector<uint8_t> mask_fused(kPixels);
     std::vector<uint8_t> display_fused(kBytes);
+    std::vector<float> alpha_map(kPixels, 0.0f);
 
-    PipelineConfig config{};
-    config.ema_alpha = kAlpha;
-    config.motion_threshold = kThreshold;
-    config.width = kWidth;
-    config.height = kHeight;
-    config.apply_isp = false;
+    PipelineConfig config = make_identity_config(kWidth, kHeight, kAlpha, kThreshold);
 
     process_frame(
         frame.data(), bg_fused.data(),
         mask_fused.data(), display_fused.data(),
-        nullptr, config
+        alpha_map.data(), config
     );
 
     // Separate path: same operations individually
@@ -79,11 +91,11 @@ TEST_F(PipelineNoISPTest, MaskMatchesSeparateKernels) {
         EXPECT_NEAR(bg_fused[i], bg_separate[i], 1e-5f) << "bg index " << i;
     }
 
-    // Verify display is a copy of frame when no ISP
+    // Identity ISP + zero alpha → display equals frame
     EXPECT_EQ(std::memcmp(display_fused.data(), frame.data(), kBytes), 0);
 }
 
-class PipelineWithISPTest : public ::testing::Test {
+class PipelineFullISPTest : public ::testing::Test {
 protected:
     static constexpr int kWidth = 16;
     static constexpr int kHeight = 8;
@@ -91,7 +103,7 @@ protected:
     static constexpr int kBytes = kPixels * 3;
 };
 
-TEST_F(PipelineWithISPTest, DisplayMatchesSeparateKernels) {
+TEST_F(PipelineFullISPTest, DisplayMatchesSeparateKernels) {
     std::vector<uint8_t> frame(kBytes);
     for (int i = 0; i < kBytes; i++) {
         frame[i] = static_cast<uint8_t>((i * 11 + 7) % 256);
@@ -100,22 +112,7 @@ TEST_F(PipelineWithISPTest, DisplayMatchesSeparateKernels) {
     std::vector<float> bg_fused(kBytes, 128.0f);
     std::vector<float> bg_separate(kBytes, 128.0f);
 
-    // ISP config: identity LUT, unity gains (no color change, just tests plumbing)
-    PipelineConfig config{};
-    config.ema_alpha = 0.1f;
-    config.motion_threshold = 20;
-    config.width = kWidth;
-    config.height = kHeight;
-    config.apply_isp = true;
-    for (int i = 0; i < 256; i++) {
-        config.ae_awb.lut[i] = static_cast<uint8_t>(i);
-    }
-    config.ae_awb.gain_b = 1.0f;
-    config.ae_awb.gain_g = 1.0f;
-    config.ae_awb.gain_r = 1.0f;
-    config.ae_awb.width = kWidth;
-    config.ae_awb.height = kHeight;
-    config.af_blur_ksize = 5;
+    PipelineConfig config = make_identity_config(kWidth, kHeight, 0.1f, 20);
 
     // Uniform alpha map (no sharpening variation)
     std::vector<float> alpha_map(kPixels, 0.5f);

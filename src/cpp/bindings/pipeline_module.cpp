@@ -91,8 +91,7 @@ PYBIND11_MODULE(streetscope_pipeline, m) {
                 float gain_b,
                 float gain_g,
                 float gain_r,
-                const py::object& alpha_map_obj,
-                int blur_ksize) {
+                const py::object& alpha_map_obj) {
             FrameLoopConfig cfg;
             cfg.pipeline.ema_alpha = ema_alpha;
             cfg.pipeline.motion_threshold = motion_threshold;
@@ -100,7 +99,6 @@ PYBIND11_MODULE(streetscope_pipeline, m) {
             bool has_lut = !lut_obj.is_none();
             bool has_alpha_map = !alpha_map_obj.is_none();
 
-            cfg.pipeline.apply_isp = has_lut;
             if (has_lut) {
                 auto lut = lut_obj.cast<py::array_t<uint8_t, py::array::c_style>>();
                 auto lut_buf = lut.request();
@@ -111,9 +109,13 @@ PYBIND11_MODULE(streetscope_pipeline, m) {
                 cfg.pipeline.ae_awb.gain_b = gain_b;
                 cfg.pipeline.ae_awb.gain_g = gain_g;
                 cfg.pipeline.ae_awb.gain_r = gain_r;
-                cfg.pipeline.af_blur_ksize =
-                    (has_alpha_map && blur_ksize > 0) ? blur_ksize : 0;
+            } else {
+                for (int i = 0; i < 256; i++) cfg.pipeline.ae_awb.lut[i] = static_cast<uint8_t>(i);
+                cfg.pipeline.ae_awb.gain_b = 1.0f;
+                cfg.pipeline.ae_awb.gain_g = 1.0f;
+                cfg.pipeline.ae_awb.gain_r = 1.0f;
             }
+            // AF always runs; alpha_map defaults are handled in frame_loop
 
             if (has_alpha_map) {
                 auto alpha_map = alpha_map_obj.cast<
@@ -134,7 +136,6 @@ PYBIND11_MODULE(streetscope_pipeline, m) {
             py::arg("gain_g") = 1.0f,
             py::arg("gain_r") = 1.0f,
             py::arg("alpha_map") = py::none(),
-            py::arg("blur_ksize") = 5,
             "Push updated ISP config. Thread-safe.")
         .def("is_running", &FrameLoop::is_running)
         .def("frames_processed", &FrameLoop::frames_processed);

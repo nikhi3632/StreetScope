@@ -4,8 +4,8 @@ import numpy as np
 import streetscope_simd as simd
 
 
-class TestProcessFrameNoISP:
-    """Fused pipeline without ISP (background model only)."""
+class TestProcessFrameIdentityISP:
+    """Fused pipeline with identity ISP (no lut = identity AE+AWB + zero alpha AF)."""
 
     def test_returns_mask_and_display(self):
         frame = np.random.randint(0, 255, (8, 16, 3), dtype=np.uint8)
@@ -18,10 +18,12 @@ class TestProcessFrameNoISP:
         assert display.shape == (8, 16, 3)
         assert display.dtype == np.uint8
 
-    def test_display_equals_frame_when_no_isp(self):
+    def test_display_equals_frame_with_identity_isp(self):
+        """Identity LUT + unity gains + zero alpha → display equals frame."""
         frame = np.random.randint(0, 255, (8, 16, 3), dtype=np.uint8)
         bg = np.full((8, 16, 3), 128.0, dtype=np.float32)
 
+        # No lut = identity ISP defaults + zero alpha map → pass-through
         mask, display = simd.process_frame(frame, bg, alpha=0.5, threshold=15)
 
         np.testing.assert_array_equal(display, frame)
@@ -58,7 +60,7 @@ class TestProcessFrameNoISP:
 
 
 class TestProcessFrameWithISP:
-    """Fused pipeline with ISP correction."""
+    """Fused pipeline with ISP correction (AE+AWB+AF)."""
 
     def test_isp_applied_when_lut_provided(self):
         frame = np.random.randint(50, 200, (8, 16, 3), dtype=np.uint8)
@@ -78,7 +80,6 @@ class TestProcessFrameWithISP:
             gain_g=1.0,
             gain_r=1.0,
             alpha_map=alpha_map,
-            blur_ksize=5,
         )
 
         # Display should differ from input (ISP was applied)
@@ -88,7 +89,7 @@ class TestProcessFrameWithISP:
         frame = np.random.randint(50, 200, (16, 16, 3), dtype=np.uint8)
         bg = np.full((16, 16, 3), 128.0, dtype=np.float32)
 
-        # Identity LUT, unity gains, zero alpha (no sharpening)
+        # Identity LUT, unity gains, zero alpha (no blur applied)
         lut = np.arange(256, dtype=np.uint8)
         alpha_map = np.zeros((16, 16), dtype=np.float32)
 
@@ -102,19 +103,19 @@ class TestProcessFrameWithISP:
             gain_g=1.0,
             gain_r=1.0,
             alpha_map=alpha_map,
-            blur_ksize=5,
         )
 
         # With identity LUT, unity gains, zero alpha: display should equal frame
         np.testing.assert_array_equal(display, frame)
 
     def test_ae_awb_only_when_no_alpha_map(self):
+        """No alpha_map provided → default zero alpha → display equals AE+AWB output."""
         frame = np.random.randint(50, 200, (8, 16, 3), dtype=np.uint8)
         bg = np.full((8, 16, 3), 128.0, dtype=np.float32)
 
         lut = np.arange(256, dtype=np.uint8)
 
-        # No alpha_map → skip AF, just AE+AWB
+        # No alpha_map → uses default zero alpha → AF is no-op → display = corrected
         mask, display = simd.process_frame(
             frame,
             bg,
@@ -126,5 +127,5 @@ class TestProcessFrameWithISP:
             gain_r=1.0,
         )
 
-        # Identity LUT + unity gains → display should equal frame
+        # Identity LUT + unity gains + zero alpha → display should equal frame
         np.testing.assert_array_equal(display, frame)

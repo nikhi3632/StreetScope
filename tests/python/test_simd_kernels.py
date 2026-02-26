@@ -271,7 +271,6 @@ class TestProcessFrame:
             gain_g=1.0,
             gain_r=1.3,
             alpha_map=alpha_map,
-            blur_ksize=5,
         )
         mask2, display2 = streetscope_simd.process_frame(
             frame,
@@ -283,7 +282,6 @@ class TestProcessFrame:
             gain_g=1.0,
             gain_r=1.3,
             alpha_map=alpha_map,
-            blur_ksize=5,
         )
 
         np.testing.assert_array_equal(bg1, bg2)
@@ -330,15 +328,14 @@ class TestProcessFrame:
                 gain_g=1.0,
                 gain_r=1.5,
                 alpha_map=alpha_map,
-                blur_ksize=5,
             )
             assert mask.dtype == np.uint8
             assert display.dtype == np.uint8
             assert set(np.unique(mask)).issubset({0, 255})
             assert np.all(np.isfinite(bg))
 
-    def test_no_isp_passthrough(self):
-        """With lut=None, display output equals the input frame."""
+    def test_identity_isp_passthrough(self):
+        """With no lut (identity ISP + zero alpha), display output equals the input frame."""
         rng = np.random.RandomState(42)
         frame = rng.randint(0, 256, (64, 64, 3), dtype=np.uint8)
         bg = rng.uniform(0, 255, (64, 64, 3)).astype(np.float32)
@@ -374,7 +371,6 @@ class TestProcessFrame:
                 gain_g=1.0,
                 gain_r=1.3,
                 alpha_map=alpha_map,
-                blur_ksize=5,
             )
             golden_mask = np.load(GOLDEN_DIR / f"mask_{i:02d}.npy")
             golden_display = np.load(GOLDEN_DIR / f"display_{i:02d}.npy")

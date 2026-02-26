@@ -100,17 +100,24 @@ void FrameLoop::run() {
             } else {
                 pcfg.ema_alpha = 0.05f;
                 pcfg.motion_threshold = 15;
-                pcfg.apply_isp = false;
-                pcfg.af_blur_ksize = 0;
+                // ISP defaults: identity LUT + unity gains
+                for (int i = 0; i < 256; i++) pcfg.ae_awb.lut[i] = static_cast<uint8_t>(i);
+                pcfg.ae_awb.gain_b = 1.0f;
+                pcfg.ae_awb.gain_g = 1.0f;
+                pcfg.ae_awb.gain_r = 1.0f;
             }
         }
 
         // Ensure dimensions match current frame
         pcfg.width = w;
         pcfg.height = h;
-        if (pcfg.apply_isp) {
-            pcfg.ae_awb.width = w;
-            pcfg.ae_awb.height = h;
+        pcfg.ae_awb.width = w;
+        pcfg.ae_awb.height = h;
+
+        // AF always runs; use all-zeros alpha map when not provided
+        if (alpha_ptr == nullptr) {
+            alpha_copy.resize(static_cast<size_t>(pixels), 0.0f);
+            alpha_ptr = alpha_copy.data();
         }
 
         // Allocate output

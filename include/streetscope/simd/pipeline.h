@@ -8,10 +8,12 @@
 //                    Typical: 0.05 (5% per frame). Set from Python config.
 // motion_threshold   Perception path: absolute pixel difference for motion mask.
 //                    Typical: 15 (6% of 255). Set from Python config.
-// af_blur_ksize      Display path: box blur kernel size for auto focus. 5 = 5x5.
-//                    0 disables AF. Odd values only.
-// apply_isp          Display path: when true, applies gamma LUT + AWB gains.
-//                    Disabled when Metal handles display correction.
+// ae_awb             ISP: AE (gamma LUT) + AWB (gain correction). Always runs.
+//                    Use identity LUT + unity gains for pass-through.
+// af_alpha_map       ISP: AF depth-of-field blend. Always runs (passed to process_frame).
+//                    Use all-zeros alpha map for fully sharp (no blur applied).
+//
+// ISP = AE + AWB + AF. All three always run. Fixed 5x5 box blur kernel.
 //
 // Internal (pipeline.cpp):
 // blur_radius      2    Fixed 5x5 kernel (2*radius+1 = 5). Balances smoothing vs cost.
@@ -26,12 +28,10 @@ struct PipelineConfig {
     int width;
     int height;
 
-    bool apply_isp;
     AEAWBConfig ae_awb;
-    int af_blur_ksize;  // 5 for 5x5 box blur, 0 to skip AF
 };
 
-/// Fused per-frame pipeline: EMA -> subtract -> (optional) AE+AWB -> blur -> AF blend.
+/// Fused per-frame pipeline: EMA -> subtract -> ISP (AE+AWB -> AF blur+blend).
 void process_frame(
     const uint8_t* frame_u8,
     float* background_f32,
@@ -41,10 +41,25 @@ void process_frame(
     const PipelineConfig& config
 );
 
+/// Convert uint8 BGR to float32 (NEON widening).
+void convert_u8_to_f32(const uint8_t* input, float* output, int count);
+
+/// Convert float32 to uint8 with saturation (NEON narrowing).
+void convert_f32_to_u8(const float* input, uint8_t* output, int count);
+
 /// Separable box blur (internal, exposed for testing).
 void box_blur_5x5(
     const uint8_t* input,
     uint8_t* output,
+    int width,
+    int height
+);
+
+/// Separable box blur with external temp buffer.
+void box_blur_5x5(
+    const uint8_t* input,
+    uint8_t* output,
+    uint8_t* temp,
     int width,
     int height
 );

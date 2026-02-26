@@ -27,6 +27,19 @@ if(SANITIZE STREQUAL "auto" AND CMAKE_BUILD_TYPE STREQUAL "Debug")
     target_link_options(test_simd PRIVATE -fsanitize=address,undefined)
 endif()
 
+add_executable(test_plan_executor test_plan_executor.cpp)
+target_link_libraries(test_plan_executor PRIVATE
+    streetscope_plan_executor
+    streetscope_simd_core
+    streetscope_warnings
+    GTest::gtest_main
+)
+if(SANITIZE STREQUAL "auto" AND CMAKE_BUILD_TYPE STREQUAL "Debug")
+    target_compile_options(test_plan_executor PRIVATE -fsanitize=address,undefined)
+    target_link_options(test_plan_executor PRIVATE -fsanitize=address,undefined)
+endif()
+set_target_properties(test_plan_executor PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+
 add_executable(test_frame_pipeline
     test_ring_buffer.cpp
 )
@@ -90,6 +103,7 @@ endif()
 
 include(GoogleTest)
 gtest_discover_tests(test_simd)
+gtest_discover_tests(test_plan_executor)
 gtest_discover_tests(test_frame_pipeline)
 if(TARGET test_frame_loop)
     gtest_discover_tests(test_frame_loop)
