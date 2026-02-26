@@ -148,7 +148,7 @@ def run(
                     if fm.frame_number != last_frame_num:
                         last_frame_num = fm.frame_number
 
-                        # Optional: background update (synchronous, < 1ms)
+                        # Optional: background update (synchronous)
                         if bg_model is not None:
                             mask, _ = bg_model.update(frame)
 

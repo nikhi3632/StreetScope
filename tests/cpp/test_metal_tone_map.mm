@@ -2,9 +2,11 @@
 #include <streetscope/inference/metal_tone_mapper.h>
 #include <streetscope/simd/tone_map.h>
 
+#import <CoreML/CoreML.h>
 #import <CoreVideo/CoreVideo.h>
 #import <Metal/Metal.h>
 
+#include <chrono>
 #include <cstddef>
 #include <vector>
 
@@ -224,28 +226,95 @@ TEST_F(MetalToneMapTest, PixelBufferMatchesScalar) {
 }
 
 // ---------------------------------------------------------------------------
-// GPU / NE Concurrency Test
+// Fused MPS Lanczos + Reinhard
 // ---------------------------------------------------------------------------
 
-TEST_F(MetalToneMapTest, GPUAndNERunConcurrently) {
-    // This test validates the heterogeneous compute architecture:
-    // Metal (GPU) and CoreML (Neural Engine) should run in parallel.
-    // We measure wall time of running both together vs sequentially.
-    //
-    // Skip if CoreML detector is not available (no model file).
-    const char* model_path = "models/yolo11s.mlpackage";
-    FILE* f = fopen(model_path, "r");
-    if (!f) {
-        GTEST_SKIP() << "Model not found at " << model_path << " — skipping concurrency test";
+TEST_F(MetalToneMapTest, FusedUpscaleOutputDimensions) {
+    const int w = 16, h = 12;
+    const auto sz = static_cast<size_t>(w) * h * 3;
+    std::vector<uint8_t> input(sz);
+    for (size_t i = 0; i < sz; i++) {
+        input[i] = static_cast<uint8_t>(i % 256);
     }
-    fclose(f);
 
-    // This test is linked with streetscope_inference only if available.
-    // The actual concurrency measurement is done in benchmark_metal.py
-    // where we have proper warm-up and statistical analysis.
-    // Here we just verify both can dispatch without error.
+    MetalToneMapper::Params params{};
+    for (int scale : {2, 3, 4}) {
+        auto result = mapper.upscale_and_tone_map(input.data(), w, h, scale, params);
+        EXPECT_EQ(result.size(), static_cast<size_t>(w * scale) * (h * scale) * 3)
+            << "scale=" << scale;
+    }
+}
+
+TEST_F(MetalToneMapTest, FusedScale1MatchesToneMap) {
+    const int w = 64, h = 48;
+    const auto sz = static_cast<size_t>(w) * h * 3;
+    std::vector<uint8_t> input(sz);
+    for (size_t i = 0; i < sz; i++) {
+        input[i] = static_cast<uint8_t>((i * 13 + 7) % 256);
+    }
+
+    MetalToneMapper::Params params{};
+    params.exposure = 1.5f;
+    params.white_point = 2.0f;
+    params.gamma = 2.2f;
+
+    auto tone_only = mapper.tone_map(input.data(), w, h, params);
+    auto fused_1x = mapper.upscale_and_tone_map(input.data(), w, h, 1, params);
+
+    ASSERT_EQ(tone_only.size(), fused_1x.size());
+    for (size_t i = 0; i < tone_only.size(); i++) {
+        EXPECT_EQ(tone_only[i], fused_1x[i]) << "byte " << i;
+    }
+}
+
+TEST_F(MetalToneMapTest, FusedToneMappingApplied) {
+    const int w = 32, h = 24;
+    const int scale = 2;
+    const auto sz = static_cast<size_t>(w) * h * 3;
+    std::vector<uint8_t> input(sz);
+    for (size_t i = 0; i < sz; i++) {
+        input[i] = static_cast<uint8_t>((i * 31 + 17) % 256);
+    }
+
+    MetalToneMapper::Params active{};
+    active.exposure = 1.5f;
+    active.white_point = 2.0f;
+    active.gamma = 1.0f;
+    active.gain_b = 0.95f;
+    active.gain_r = 1.05f;
+
+    MetalToneMapper::Params identity{};
+    identity.exposure = 1.0f;
+    identity.white_point = 1.0f;
+    identity.gamma = 1.0f;
+
+    auto fused = mapper.upscale_and_tone_map(input.data(), w, h, scale, active);
+    auto neutral = mapper.upscale_and_tone_map(input.data(), w, h, scale, identity);
+
+    ASSERT_EQ(fused.size(), neutral.size());
+
+    int diff_count = 0;
+    for (size_t i = 0; i < fused.size(); i++) {
+        if (fused[i] != neutral[i]) diff_count++;
+    }
+    EXPECT_GT(diff_count, static_cast<int>(fused.size()) / 2)
+        << "Tone mapping should modify most pixels";
+}
+
+TEST_F(MetalToneMapTest, FusedInvalidScale) {
+    std::vector<uint8_t> input(8 * 4 * 3, 128);
+    MetalToneMapper::Params params{};
+
+    EXPECT_THROW(mapper.upscale_and_tone_map(input.data(), 8, 4, 0, params),
+                 std::invalid_argument);
+    EXPECT_THROW(mapper.upscale_and_tone_map(input.data(), 8, 4, -1, params),
+                 std::invalid_argument);
+}
+
+TEST_F(MetalToneMapTest, FusedRealisticResolution) {
     const int w = 512, h = 288;
-    const auto sz = static_cast<size_t>(w * h) * 3;
+    const int scale = 2;
+    const auto sz = static_cast<size_t>(w) * h * 3;
     std::vector<uint8_t> input(sz);
     for (size_t i = 0; i < sz; i++) {
         input[i] = static_cast<uint8_t>((i * 7) % 256);
@@ -254,15 +323,306 @@ TEST_F(MetalToneMapTest, GPUAndNERunConcurrently) {
     MetalToneMapper::Params params{};
     params.exposure = 1.5f;
     params.white_point = 2.0f;
-    params.gamma = 2.2f;
+    params.gamma = 1.0f;
+    params.gain_b = 0.95f;
+    params.gain_r = 1.05f;
 
-    // Just verify Metal dispatches successfully on a real-sized frame
-    auto out = mapper.tone_map(input.data(), w, h, params);
-    EXPECT_EQ(out.size(), sz);
+    auto result = mapper.upscale_and_tone_map(input.data(), w, h, scale, params);
+    ASSERT_EQ(result.size(), static_cast<size_t>(w * scale) * (h * scale) * 3);
 
-    bool any_nonzero = false;
-    for (size_t i = 0; i < sz; i++) {
-        if (out[i] != 0) { any_nonzero = true; break; }
+    // Sanity: not all zero or all saturated
+    int zero_count = 0, max_count = 0;
+    for (auto b : result) {
+        if (b == 0) zero_count++;
+        if (b == 255) max_count++;
     }
-    EXPECT_TRUE(any_nonzero);
+    EXPECT_LT(zero_count, static_cast<int>(result.size()) / 2);
+    EXPECT_LT(max_count, static_cast<int>(result.size()) / 2);
+}
+
+// ---------------------------------------------------------------------------
+// GPU / NE Concurrency Test
+// ---------------------------------------------------------------------------
+//
+// Proves heterogeneous compute: Metal GPU and CoreML Neural Engine run in
+// parallel. Uses raw Metal APIs for non-blocking GPU dispatch and loads the
+// YOLO model with MLComputeUnitsCPUAndNeuralEngine to exclude the GPU —
+// forcing inference onto the Neural Engine.
+//
+
+namespace {
+
+// GPU-side params — must match Metal shader layout
+struct GPUToneMapParams {
+    float exposure;
+    float white_point;
+    float gamma;
+    float gain_b;
+    float gain_g;
+    float gain_r;
+    int width;
+    int height;
+};
+
+// Same tone map shader used in MetalToneMapper — embedded here so the test
+// can dispatch non-blocking without going through the synchronous API.
+constexpr const char* kTestShaderSource = R"(
+#include <metal_stdlib>
+using namespace metal;
+
+struct ToneMapParams {
+    float exposure;
+    float white_point;
+    float gamma;
+    float gain_b;
+    float gain_g;
+    float gain_r;
+    int width;
+    int height;
+};
+
+static float3 apply_reinhard(float3 rgb, constant ToneMapParams& p) {
+    rgb *= float3(p.gain_r, p.gain_g, p.gain_b);
+    rgb *= p.exposure;
+    float lum = dot(rgb, float3(0.2126f, 0.7152f, 0.0722f));
+    if (lum > 1e-6f) {
+        float ws = p.white_point * p.white_point;
+        float lm = lum * (1.0f + lum / ws) / (1.0f + lum);
+        rgb *= (lm / lum);
+    }
+    rgb = clamp(rgb, 0.0f, 1.0f);
+    float inv_gamma = 1.0f / p.gamma;
+    rgb = pow(rgb, float3(inv_gamma));
+    return rgb;
+}
+
+kernel void tone_map_bgr(
+    device const uchar* input  [[buffer(0)]],
+    device uchar*       output [[buffer(1)]],
+    constant ToneMapParams& params [[buffer(2)]],
+    uint gid [[thread_position_in_grid]]
+) {
+    int total = params.width * params.height;
+    if (int(gid) >= total) return;
+    uint base = gid * 3;
+    float3 rgb = float3(
+        float(input[base + 2]) / 255.0f,
+        float(input[base + 1]) / 255.0f,
+        float(input[base])     / 255.0f
+    );
+    rgb = apply_reinhard(rgb, params);
+    output[base]     = uchar(rgb.z * 255.0f + 0.5f);
+    output[base + 1] = uchar(rgb.y * 255.0f + 0.5f);
+    output[base + 2] = uchar(rgb.x * 255.0f + 0.5f);
+}
+)";
+
+/// Encode + commit Metal tone map work. Does NOT wait — returns the command
+/// buffer so the caller can wait later.
+static id<MTLCommandBuffer> dispatch_metal_nonblocking(
+    id<MTLCommandQueue> queue,
+    id<MTLComputePipelineState> pipeline,
+    id<MTLBuffer> input_buf,
+    id<MTLBuffer> output_buf,
+    const GPUToneMapParams& params,
+    int w, int h
+) {
+    id<MTLCommandBuffer> cmd = [queue commandBuffer];
+    id<MTLComputeCommandEncoder> encoder = [cmd computeCommandEncoder];
+    [encoder setComputePipelineState:pipeline];
+    [encoder setBuffer:input_buf offset:0 atIndex:0];
+    [encoder setBuffer:output_buf offset:0 atIndex:1];
+    [encoder setBytes:&params length:sizeof(params) atIndex:2];
+
+    auto total_threads = static_cast<NSUInteger>(w) * h;
+    NSUInteger thread_width = pipeline.maxTotalThreadsPerThreadgroup;
+    if (thread_width > total_threads) thread_width = total_threads;
+    MTLSize grid = MTLSizeMake(total_threads, 1, 1);
+    MTLSize group = MTLSizeMake(thread_width, 1, 1);
+    [encoder dispatchThreads:grid threadsPerThreadgroup:group];
+    [encoder endEncoding];
+    [cmd commit];
+    return cmd;  // caller calls [cmd waitUntilCompleted]
+}
+
+/// Run one YOLO prediction on a dummy input. Returns wall time in ms.
+static double run_yolo_prediction(MLModel* model, NSString* input_name) {
+    @autoreleasepool {
+        // Create 640x640 BGRA CVPixelBuffer as YOLO input
+        NSDictionary* attrs = @{
+            (NSString*)kCVPixelBufferIOSurfacePropertiesKey: @{},
+        };
+        CVPixelBufferRef pb = nullptr;
+        CVPixelBufferCreate(kCFAllocatorDefault, 640, 640,
+                            kCVPixelFormatType_32BGRA,
+                            (__bridge CFDictionaryRef)attrs, &pb);
+        CVPixelBufferLockBaseAddress(pb, 0);
+        memset(CVPixelBufferGetBaseAddress(pb), 128,
+               CVPixelBufferGetBytesPerRow(pb) * 640);
+        CVPixelBufferUnlockBaseAddress(pb, 0);
+
+        MLFeatureValue* fv = [MLFeatureValue featureValueWithPixelBuffer:pb];
+        NSDictionary* dict = @{input_name: fv};
+        NSError* error = nil;
+        MLDictionaryFeatureProvider* provider =
+            [[MLDictionaryFeatureProvider alloc] initWithDictionary:dict
+                                                             error:&error];
+
+        auto t0 = std::chrono::steady_clock::now();
+        [model predictionFromFeatures:provider error:&error];
+        auto t1 = std::chrono::steady_clock::now();
+
+        CVPixelBufferRelease(pb);
+        return std::chrono::duration<double, std::milli>(t1 - t0).count();
+    }
+}
+
+}  // anonymous namespace
+
+TEST(ConcurrencyTest, GPUAndNERunConcurrently) {
+    @autoreleasepool {
+        // --- Skip if YOLO model not available ---
+        const char* model_path = "models/yolo11s.mlpackage";
+        NSString* path = [NSString stringWithUTF8String:model_path];
+        BOOL is_dir = NO;
+        if (![[NSFileManager defaultManager] fileExistsAtPath:path
+                                                  isDirectory:&is_dir] || !is_dir) {
+            GTEST_SKIP() << "Model not found at " << model_path;
+        }
+
+        // --- Load YOLO with CPUAndNeuralEngine (exclude GPU) ---
+        NSError* error = nil;
+        NSURL* url = [NSURL fileURLWithPath:path];
+        NSURL* compiled = [MLModel compileModelAtURL:url error:&error];
+        ASSERT_EQ(error, nil) << [[error localizedDescription] UTF8String];
+
+        MLModelConfiguration* config = [[MLModelConfiguration alloc] init];
+        config.computeUnits = MLComputeUnitsCPUAndNeuralEngine;
+
+        MLModel* yolo = [MLModel modelWithContentsOfURL:compiled
+                                          configuration:config
+                                                  error:&error];
+        ASSERT_EQ(error, nil) << [[error localizedDescription] UTF8String];
+
+        NSString* yolo_input_name =
+            yolo.modelDescription.inputDescriptionsByName.allKeys.firstObject;
+        ASSERT_NE(yolo_input_name, nil);
+
+        // --- Create Metal pipeline ---
+        id<MTLDevice> device = MTLCreateSystemDefaultDevice();
+        ASSERT_NE(device, nil);
+        id<MTLCommandQueue> queue = [device newCommandQueue];
+
+        NSString* src = [NSString stringWithUTF8String:kTestShaderSource];
+        id<MTLLibrary> lib = [device newLibraryWithSource:src
+                                                  options:nil
+                                                    error:&error];
+        ASSERT_NE(lib, nil) << [[error localizedDescription] UTF8String];
+        id<MTLFunction> fn = [lib newFunctionWithName:@"tone_map_bgr"];
+        ASSERT_NE(fn, nil);
+        id<MTLComputePipelineState> pipeline =
+            [device newComputePipelineStateWithFunction:fn error:&error];
+        ASSERT_NE(pipeline, nil);
+
+        // --- Prepare Metal buffers (4K frame) ---
+        // Use a large frame so GPU work is comparable to YOLO on NE,
+        // making overlap clearly measurable.
+        const int w = 3840, h = 2160;
+        const auto byte_count = static_cast<NSUInteger>(w) * h * 3;
+        std::vector<uint8_t> input(byte_count);
+        for (size_t i = 0; i < byte_count; i++) {
+            input[i] = static_cast<uint8_t>((i * 7) % 256);
+        }
+
+        id<MTLBuffer> input_buf =
+            [device newBufferWithBytes:input.data()
+                                length:byte_count
+                               options:MTLResourceStorageModeShared];
+        id<MTLBuffer> output_buf =
+            [device newBufferWithLength:byte_count
+                                options:MTLResourceStorageModeShared];
+
+        GPUToneMapParams gpu_params{};
+        gpu_params.exposure = 1.5f;
+        gpu_params.white_point = 2.0f;
+        gpu_params.gamma = 2.2f;
+        gpu_params.gain_b = 1.0f;
+        gpu_params.gain_g = 1.0f;
+        gpu_params.gain_r = 1.0f;
+        gpu_params.width = w;
+        gpu_params.height = h;
+
+        // --- Warmup (3 iterations each) ---
+        for (int i = 0; i < 3; i++) {
+            auto cmd = dispatch_metal_nonblocking(
+                queue, pipeline, input_buf, output_buf, gpu_params, w, h);
+            [cmd waitUntilCompleted];
+        }
+        for (int i = 0; i < 3; i++) {
+            run_yolo_prediction(yolo, yolo_input_name);
+        }
+
+        // --- Sequential: Metal (blocking) then YOLO (blocking) ---
+        constexpr int kTrials = 5;
+        double best_seq = 1e9;
+        double best_metal_alone = 1e9;
+        double best_yolo_alone = 1e9;
+
+        for (int t = 0; t < kTrials; t++) {
+            auto t0 = std::chrono::steady_clock::now();
+            auto cmd = dispatch_metal_nonblocking(
+                queue, pipeline, input_buf, output_buf, gpu_params, w, h);
+            [cmd waitUntilCompleted];
+            auto t1 = std::chrono::steady_clock::now();
+            double yolo_ms = run_yolo_prediction(yolo, yolo_input_name);
+            auto t2 = std::chrono::steady_clock::now();
+
+            double metal_ms =
+                std::chrono::duration<double, std::milli>(t1 - t0).count();
+            double total_ms =
+                std::chrono::duration<double, std::milli>(t2 - t0).count();
+
+            best_metal_alone = std::min(best_metal_alone, metal_ms);
+            best_yolo_alone = std::min(best_yolo_alone, yolo_ms);
+            best_seq = std::min(best_seq, total_ms);
+        }
+
+        // --- Concurrent: Metal commit (non-blocking) + YOLO (NE) ---
+        double best_conc = 1e9;
+
+        for (int t = 0; t < kTrials; t++) {
+            auto t0 = std::chrono::steady_clock::now();
+
+            // GPU: commit tone map work, returns immediately
+            auto cmd = dispatch_metal_nonblocking(
+                queue, pipeline, input_buf, output_buf, gpu_params, w, h);
+
+            // NE: YOLO inference runs while GPU is working
+            run_yolo_prediction(yolo, yolo_input_name);
+
+            // GPU: wait for completion (should already be done if overlap worked)
+            [cmd waitUntilCompleted];
+
+            auto t1 = std::chrono::steady_clock::now();
+            double conc_ms =
+                std::chrono::duration<double, std::milli>(t1 - t0).count();
+            best_conc = std::min(best_conc, conc_ms);
+        }
+
+        // --- Report ---
+        double overlap_pct = (1.0 - best_conc / best_seq) * 100.0;
+        printf("\n=== GPU/NE Concurrency Test ===\n");
+        printf("Metal alone:  %.2f ms\n", best_metal_alone);
+        printf("YOLO alone:   %.2f ms  (CPUAndNeuralEngine)\n", best_yolo_alone);
+        printf("Sequential:   %.2f ms  (Metal + YOLO)\n", best_seq);
+        printf("Concurrent:   %.2f ms  (Metal || YOLO)\n", best_conc);
+        printf("Overlap:      %.1f%%\n", overlap_pct);
+        printf("Expected max: %.2f ms  (max of individual)\n",
+               std::max(best_metal_alone, best_yolo_alone));
+
+        // Concurrent should be closer to max(metal, yolo) than to sum.
+        // At least 10% faster than sequential proves real overlap.
+        EXPECT_LT(best_conc, best_seq * 0.9)
+            << "Expected at least 10% speedup from GPU/NE overlap";
+    }
 }

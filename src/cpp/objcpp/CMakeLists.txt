@@ -53,6 +53,7 @@ if(APPLE)
     target_link_libraries(streetscope_metal PUBLIC
         streetscope_frame
         "-framework Metal"
+        "-framework MetalPerformanceShaders"
         "-framework CoreVideo"
         "-framework Foundation"
     )

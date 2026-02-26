@@ -32,9 +32,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from src.python.bootstrap.stream_discovery import probe_stream
 from src.python.core.stabilizer import BackgroundModel, FrameStabilizer
 from src.python.core.stream import FrameGrabber, StreamError, StreamMetrics
+from src.python.isp.converter import isp_to_reinhard
 from src.python.isp.estimator import AUTO_FOCUS_ALPHA_MAX, ISPEstimator, ISPParams
 from src.python.perception.detector import YoloDetector
-from src.python.perception.tracker import Tracker
+from src.python.perception.tracker import TrackedObject, Tracker
 
 # Try native Core ML detector
 native_detector = None
@@ -62,6 +63,7 @@ try:
     metal_mapper_cls = MetalToneMapper
 except ImportError:
     pass
+
 
 WINDOW_NAME = "StreetScope - Pipeline"
 DEFAULT_MODEL_PATH = "models/yolo11s.mlpackage"
@@ -141,6 +143,9 @@ def build_display(
     motion_pct: float,
     isp_active: bool = False,
     metal_active: bool = False,
+    upscale: int = 0,
+    upscale_ms: float = 0.0,
+    metal_ms: float = 0.0,
 ) -> np.ndarray:
     w = original.shape[1]
 
@@ -167,18 +172,31 @@ def build_display(
 
     # Metrics bar at bottom
     out_h = display.shape[0]
-    if metal_active:
+    if metal_active and upscale > 0:
+        isp_tag = f"ISP: GPU (Lanczos {upscale}x + Reinhard)"
+    elif metal_active:
         isp_tag = "ISP: Metal GPU"
     elif isp_active:
         isp_tag = "ISP: on"
     else:
         isp_tag = "ISP: warmup"
-    line = (
-        f"FPS: {sm.effective_fps:.1f}  "
-        f"YOLO: {infer_ms:.1f}ms  "
-        f"Det: {num_dets}  Tracks: {num_tracks}  "
-        f"Motion: {motion_pct:.1f}%  {isp_tag}"
+    parts = [
+        f"FPS: {sm.effective_fps:.1f}",
+        f"YOLO: {infer_ms:.1f}ms",
+    ]
+    if upscale > 0 and upscale_ms > 0:
+        parts.append(f"GPU: {upscale_ms:.1f}ms")
+    elif metal_active and metal_ms > 0:
+        parts.append(f"Metal: {metal_ms:.1f}ms")
+    parts.extend(
+        [
+            f"Det: {num_dets}",
+            f"Tracks: {num_tracks}",
+            f"Motion: {motion_pct:.1f}%",
+            isp_tag,
+        ]
     )
+    line = "  ".join(parts)
     cv2.putText(
         display, line, (5, out_h - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 0), 1, cv2.LINE_AA
     )
@@ -193,6 +211,7 @@ def run(
     conf: float,
     duration: int,
     use_metal: bool = False,
+    upscale: int = 0,
 ) -> None:
     global shutdown_requested
     shutdown_requested = False
@@ -217,6 +236,9 @@ def run(
     total_raw_detections = 0
     total_detections = 0
     infer_times: list[float] = []
+    upscale_times: list[float] = []
+    metal_times: list[float] = []
+    frame_times: list[float] = []
     frames_displayed = 0
 
     # Tracking quality metrics
@@ -254,6 +276,16 @@ def run(
                 "Warning: --metal requested but MetalToneMapper not available, falling back to NEON ISP"
             )
 
+    # GPU upscaling (Lanczos interpolation — display enhancement, no ML)
+    if upscale > 0:
+        # Upscale implies Metal tone mapping
+        if metal_mapper is None and metal_mapper_cls is not None:
+            metal_mapper = metal_mapper_cls()
+        out_w, out_h = profile.width * upscale, profile.height * upscale
+        print(
+            f"Upscale: MPS Lanczos {upscale}x ({profile.width}x{profile.height} -> {out_w}x{out_h})"
+        )
+
     print(f"Model: {model_path} (conf={conf}, {detector_name}, warmed up)")
     print("Pipeline: detect → track")
     print("Quit: 'q'/Escape in window | close window | Ctrl+C")
@@ -283,6 +315,7 @@ def run(
                     # Only process genuinely new frames
                     if fm.frame_number != last_frame_num:
                         last_frame_num = fm.frame_number
+                        t_frame_start = time.monotonic()
 
                         # Branch: C++ FrameLoop (decode+process in C++) vs legacy Python
                         if hasattr(raw_result, "bgr"):
@@ -358,33 +391,29 @@ def run(
                             if isp_params is not None and simd_module is None:
                                 display_frame = ISPEstimator.apply(stabilized, isp_params)
 
-                        # Metal tone mapping: replace NEON ISP display correction with GPU Reinhard
+                        # Metal tone mapping: replace NEON ISP display correction with GPU Reinhard.
+                        # Use stabilized frame as display base — raw_result.display is unstabilized,
+                        # so detection bboxes (in stabilized coords) would be offset.
+                        upscale_ms = 0.0
+                        metal_ms = 0.0
                         if metal_mapper is not None and isp_params is not None:
-                            gains = isp_params.auto_white_balance_gains
-                            # Derive Reinhard params from scene statistics.
-                            # These are empirical mappings from scene statistics.
-                            gray = cv2.cvtColor(display_frame, cv2.COLOR_BGR2GRAY)
-                            mean_lum = float(gray.mean()) / 255.0
-                            # Exposure: push mean luminance toward 0.5 (mid-gray).
-                            # 0.5 target = same assumption as ISPEstimator's
-                            # target_mean=128. Bright scenes get exposure < 1,
-                            # dark scenes get exposure > 1.
-                            exposure = 0.5 / max(mean_lum, 0.01)
-                            # White point: 99th percentile luminance sets the
-                            # Reinhard highlight ceiling. Pixels above this get
-                            # compressed. 99th (not 95th) preserves most highlights;
-                            # only specular/blown pixels get rolled off.
-                            p99 = float(np.percentile(gray, 99)) / 255.0
-                            white_point = max(p99 * exposure, 1.0)
-                            display_frame = metal_mapper.tone_map(
-                                display_frame,
-                                exposure=exposure,
-                                white_point=white_point,
-                                gamma=1.0,
-                                gain_b=float(gains[0]),
-                                gain_g=float(gains[1]),
-                                gain_r=float(gains[2]),
-                            )
+                            reinhard = isp_to_reinhard(isp_params)
+
+                            if upscale > 0:
+                                # Fused GPU: MPS Lanczos + Reinhard in one command buffer
+                                t_up0 = time.monotonic()
+                                display_frame = metal_mapper.upscale_and_tone_map(
+                                    stabilized, upscale, **reinhard
+                                )
+                                upscale_ms = (time.monotonic() - t_up0) * 1000
+                                upscale_times.append(upscale_ms)
+                            else:
+                                # Tone map only (no upscale)
+                                display_frame = stabilized
+                                t_metal0 = time.monotonic()
+                                display_frame = metal_mapper.tone_map(display_frame, **reinhard)
+                                metal_ms = (time.monotonic() - t_metal0) * 1000
+                                metal_times.append(metal_ms)
 
                         motion_pct = (
                             np.count_nonzero(mask) / mask.size * 100 if mask.size > 0 else 0
@@ -429,8 +458,43 @@ def run(
 
                         # Panel 1: raw original frame
                         # Panel 2: ISP-corrected stabilized + tracked objects
-                        original = stabilized  # raw frame for display
-                        combined_frame = draw_combined(display_frame, tracked)
+
+                        # Scale detection overlays to display resolution
+                        if upscale > 0 and display_frame.shape[0] != stabilized.shape[0]:
+                            overlay_scale = display_frame.shape[0] / stabilized.shape[0]
+                            display_tracked = []
+                            for t in tracked:
+                                x1, y1, x2, y2 = t.bbox
+                                scaled = TrackedObject(
+                                    track_id=t.track_id,
+                                    bbox=(
+                                        int(x1 * overlay_scale),
+                                        int(y1 * overlay_scale),
+                                        int(x2 * overlay_scale),
+                                        int(y2 * overlay_scale),
+                                    ),
+                                    confidence=t.confidence,
+                                    class_id=t.class_id,
+                                    class_name=t.class_name,
+                                    trail=[
+                                        (int(x * overlay_scale), int(y * overlay_scale))
+                                        for x, y in t.trail
+                                    ],
+                                )
+                                display_tracked.append(scaled)
+                            combined_frame = draw_combined(display_frame, display_tracked)
+                        else:
+                            combined_frame = draw_combined(display_frame, tracked)
+
+                        # Match original panel to display resolution for side-by-side
+                        if upscale > 0 and display_frame.shape[0] != stabilized.shape[0]:
+                            original = cv2.resize(
+                                stabilized,
+                                (display_frame.shape[1], display_frame.shape[0]),
+                                interpolation=cv2.INTER_LINEAR,
+                            )
+                        else:
+                            original = stabilized
                         sm = grabber.metrics
                         display = build_display(
                             original,
@@ -442,8 +506,12 @@ def run(
                             motion_pct=motion_pct,
                             isp_active=isp_params is not None,
                             metal_active=metal_mapper is not None and isp_params is not None,
+                            upscale=upscale,
+                            upscale_ms=upscale_ms,
+                            metal_ms=metal_ms,
                         )
                         cv2.imshow(WINDOW_NAME, display)
+                        frame_times.append((time.monotonic() - t_frame_start) * 1000)
 
                 key = cv2.waitKey(1) & 0xFF
                 if key == ord("q") or key == 27:
@@ -510,6 +578,20 @@ def run(
                 f"    YOLO latency:      {sum(infer_times) / len(infer_times):.1f} ms avg "
                 f" ({min(infer_times):.1f} / {max(infer_times):.1f} min/max)"
             )
+        if upscale_times and upscale > 0:
+            print()
+            print("  Display path (fused GPU):")
+            print(
+                f"    Lanczos {upscale}x+Reinhard: {sum(upscale_times) / len(upscale_times):.1f} ms avg "
+                f" ({min(upscale_times):.1f} / {max(upscale_times):.1f} min/max)"
+            )
+        elif metal_times:
+            print()
+            print("  Display path:")
+            print(
+                f"    Metal latency:     {sum(metal_times) / len(metal_times):.1f} ms avg "
+                f" ({min(metal_times):.1f} / {max(metal_times):.1f} min/max)"
+            )
         print()
         print("  Tracking:")
         print(f"    Unique tracks:     {total_tracks}")
@@ -548,6 +630,22 @@ def run(
                 print("    Metal tone map:    yes (GPU Reinhard)")
         else:
             print("    Not computed (warmup incomplete)")
+        if frame_times:
+            print()
+            print("  Pipeline:")
+            avg_frame = sum(frame_times) / len(frame_times)
+            print(
+                f"    Frame processing:  {avg_frame:.1f} ms avg "
+                f" ({min(frame_times):.1f} / {max(frame_times):.1f} min/max)"
+            )
+            print(f"    Frames processed:  {len(frame_times)} / {sm.frames_decoded} decoded")
+            if sm.avg_interval_ms > 0:
+                utilization = avg_frame / sm.avg_interval_ms * 100
+                headroom = sm.avg_interval_ms - avg_frame
+                print(
+                    f"    Budget:            {avg_frame:.1f} / {sm.avg_interval_ms:.1f} ms ({utilization:.0f}% utilization)"
+                )
+                print(f"    Headroom:          {headroom:.1f} ms")
         print()
         print("  System:")
         print(f"    Memory:            {mem_mb:.0f} MB")
@@ -577,13 +675,28 @@ def main():
     parser.add_argument(
         "--metal", action="store_true", help="Use Metal GPU tone mapping instead of NEON ISP"
     )
+    parser.add_argument(
+        "--upscale",
+        type=int,
+        default=0,
+        metavar="SCALE",
+        help="Upscale display by SCALE factor using MPS Lanczos on GPU (e.g. --upscale 2)",
+    )
     args = parser.parse_args()
 
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
 
     try:
-        run(args.url, args.model, args.vehicles_only, args.conf, args.duration, args.metal)
+        run(
+            args.url,
+            args.model,
+            args.vehicles_only,
+            args.conf,
+            args.duration,
+            args.metal,
+            args.upscale,
+        )
     except Exception as e:
         logging.getLogger(__name__).error("Fatal: %s", e)
         sys.exit(1)

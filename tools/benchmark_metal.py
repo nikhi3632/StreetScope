@@ -123,6 +123,61 @@ def benchmark_metal_zerocopy():
     return times
 
 
+def benchmark_fused_upscale():
+    """Fused MPS Lanczos + Reinhard (single GPU command buffer)."""
+    from streetscope_pipeline import MetalToneMapper
+
+    mapper = MetalToneMapper()
+    frames = [
+        np.random.randint(0, 255, (FRAME_H, FRAME_W, 3), dtype=np.uint8)
+        for _ in range(N_ITERATIONS)
+    ]
+
+    # Warmup
+    for i in range(N_WARMUP):
+        mapper.upscale_and_tone_map(frames[i], 2, exposure=1.5, white_point=2.0, gamma=1.0)
+
+    times_2x = []
+    for frame in frames:
+        t0 = time.monotonic()
+        mapper.upscale_and_tone_map(frame, 2, exposure=1.5, white_point=2.0, gamma=1.0)
+        times_2x.append((time.monotonic() - t0) * 1000)
+
+    times_4x = []
+    for frame in frames:
+        t0 = time.monotonic()
+        mapper.upscale_and_tone_map(frame, 4, exposure=1.5, white_point=2.0, gamma=1.0)
+        times_4x.append((time.monotonic() - t0) * 1000)
+
+    return times_2x, times_4x
+
+
+def benchmark_separate_upscale():
+    """Separate CPU Lanczos + Metal Reinhard (for comparison)."""
+    import cv2
+    from streetscope_pipeline import MetalToneMapper
+
+    mapper = MetalToneMapper()
+    frames = [
+        np.random.randint(0, 255, (FRAME_H, FRAME_W, 3), dtype=np.uint8)
+        for _ in range(N_ITERATIONS)
+    ]
+
+    # Warmup
+    for i in range(N_WARMUP):
+        up = cv2.resize(frames[i], (FRAME_W * 2, FRAME_H * 2), interpolation=cv2.INTER_LANCZOS4)
+        mapper.tone_map(up, exposure=1.5, white_point=2.0, gamma=1.0)
+
+    times = []
+    for frame in frames:
+        t0 = time.monotonic()
+        up = cv2.resize(frame, (FRAME_W * 2, FRAME_H * 2), interpolation=cv2.INTER_LANCZOS4)
+        mapper.tone_map(up, exposure=1.5, white_point=2.0, gamma=1.0)
+        times.append((time.monotonic() - t0) * 1000)
+
+    return times
+
+
 def benchmark_concurrency():
     """Metal + CoreML dispatched together vs sequentially."""
     from streetscope_pipeline import CoreMLDetector, MetalToneMapper
@@ -206,6 +261,22 @@ def main():
             neon_mean = np.mean(neon_times)
             print(f"  NEON ISP vs Python ISP:     {py_mean / neon_mean:.2f}x")
             print(f"  Metal BGR vs NEON ISP:      {neon_mean / metal_mean:.2f}x")
+        print()
+
+        print("Running Fused Upscale (MPS Lanczos + Reinhard)...")
+        fused_2x, fused_4x = benchmark_fused_upscale()
+        report("Fused 2x", fused_2x)
+        report("Fused 4x", fused_4x)
+        print()
+
+        print("Running Separate Upscale (CPU Lanczos + Metal Reinhard)...")
+        sep_2x = benchmark_separate_upscale()
+        report("Separate 2x (CPU+GPU)", sep_2x)
+        print()
+
+        fused_mean = np.mean(fused_2x)
+        sep_mean = np.mean(sep_2x)
+        print(f"  Fused vs Separate (2x): {sep_mean / fused_mean:.2f}x")
         print()
 
         if os.path.isdir(MODEL_PATH):

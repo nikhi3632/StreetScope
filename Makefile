@@ -1,5 +1,5 @@
 .PHONY: test lint tidy fix format check build build-release install \
-       play detect detect-mask background pipeline pipeline-metal capture benchmark-simd benchmark-coreml benchmark-metal isp export-coreml \
+       play detect detect-mask background pipeline pipeline-metal pipeline-upscale capture benchmark-simd benchmark-coreml benchmark-metal isp export-coreml pipeline-no-metal \
        docker-build docker-asan docker-tsan docker-valgrind docker-all docker-shell docker-clean
 
 # ── Build ─────────────────────────────────────────────────
@@ -55,10 +55,16 @@ background:
 	PYTHONPATH=build .venv/bin/python tools/background_viewer.py --url "$(URL)"
 
 pipeline:
+	PYTHONPATH=build .venv/bin/python tools/pipeline_viewer.py --url "$(URL)" --vehicles-only --metal --upscale 2
+
+pipeline-no-metal:
 	PYTHONPATH=build .venv/bin/python tools/pipeline_viewer.py --url "$(URL)" --vehicles-only
 
 pipeline-metal:
 	PYTHONPATH=build .venv/bin/python tools/pipeline_viewer.py --url "$(URL)" --vehicles-only --metal
+
+pipeline-upscale:
+	PYTHONPATH=build .venv/bin/python tools/pipeline_viewer.py --url "$(URL)" --vehicles-only --metal --upscale 4
 
 capture:
 	.venv/bin/python tools/capture_frames.py --url "$(URL)" --count 200
@@ -85,8 +91,8 @@ isp:
 	PYTHONPATH=build .venv/bin/python tools/isp_viewer.py --url "$(URL)"
 
 export-coreml:
-	.venv/bin/python tools/export_pt2coreml.py yolo
-	.venv/bin/python tools/export_pt2coreml.py realesrgan
+	.venv/bin/python tools/fetch_models.py
+	.venv/bin/python tools/export_pt2coreml.py
 
 # ── Docker (sanitizer + Valgrind testing on Linux) ───────
 # OpenCV is skipped on Linux (all OpenCV-dependent code is macOS-only).

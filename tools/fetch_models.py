@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""Download model weights (YOLO11s + Real-ESRGAN).
+"""Download model weights (YOLO11s).
 
 Downloads PyTorch weights from GitHub releases.
 To export to Core ML, run:
-    python tools/export_pt2coreml.py yolo
-    python tools/export_pt2coreml.py realesrgan --variant x2plus
+    python tools/export_pt2coreml.py
 
 Usage:
     python tools/fetch_models.py
@@ -20,11 +19,6 @@ MODELS = [
         "url": "https://github.com/ultralytics/assets/releases/download/v8.4.0/yolo11s.pt",
         "filename": "yolo11s.pt",
         "description": "YOLO11s detection",
-    },
-    {
-        "url": "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.1/RealESRGAN_x2plus.pth",
-        "filename": "RealESRGAN_x2plus.pth",
-        "description": "Real-ESRGAN x2 super-resolution (23 RRDB blocks)",
     },
 ]
 
@@ -69,11 +63,9 @@ def main() -> None:
             download(model["url"], dest)
 
     print()
-    print("Next steps (export to Core ML):")
     if not (output_dir / "yolo11s.mlpackage").exists():
-        print("  python tools/export_pt2coreml.py yolo")
-    if not (output_dir / "realesrgan_x2plus.mlpackage").exists():
-        print("  python tools/export_pt2coreml.py realesrgan")
+        print("Next step (export to Core ML):")
+        print("  python tools/export_pt2coreml.py")
 
 
 if __name__ == "__main__":

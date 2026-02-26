@@ -4,6 +4,7 @@ import cv2
 import numpy as np
 import pytest
 
+from src.python.isp.converter import isp_to_reinhard
 from src.python.isp.estimator import (
     ISPEstimator,
     ISPParams,
@@ -355,3 +356,57 @@ class TestPersistence:
         h1 = url_hash("https://example.com/stream1")
         h2 = url_hash("https://example.com/stream2")
         assert h1 != h2
+
+
+class TestISPToReinhard:
+    def test_identity_params(self):
+        """Identity ISPParams -> exposure~1, white_point~1, gains=1."""
+        identity = ISPParams(
+            auto_exposure_lut=np.arange(256, dtype=np.uint8),
+            auto_white_balance_gains=np.array([1.0, 1.0, 1.0], dtype=np.float32),
+            blur_map=np.zeros((8, 8), dtype=np.float32),
+        )
+        result = isp_to_reinhard(identity)
+        assert abs(result["exposure"] - 1.0) < 0.1
+        assert abs(result["white_point"] - 1.0) < 0.1
+        assert result["gamma"] == 1.0
+        assert result["gain_b"] == 1.0
+        assert result["gain_g"] == 1.0
+        assert result["gain_r"] == 1.0
+
+    def test_dark_scene_high_exposure(self):
+        """Dark scene (gamma < 1) -> exposure > 1."""
+        dark_plate = np.full((240, 320, 3), 50.0, dtype=np.float32)
+        params = ISPEstimator().estimate(dark_plate)
+        result = isp_to_reinhard(params)
+        assert result["exposure"] > 1.0
+
+    def test_bright_scene_low_exposure(self):
+        """Bright scene (gamma > 1) -> exposure < 1."""
+        bright_plate = np.full((240, 320, 3), 200.0, dtype=np.float32)
+        params = ISPEstimator().estimate(bright_plate)
+        result = isp_to_reinhard(params)
+        assert result["exposure"] < 1.0
+
+    def test_awb_gains_pass_through(self):
+        """AWB gains from ISPParams pass through unchanged."""
+        params = ISPParams(
+            auto_exposure_lut=np.arange(256, dtype=np.uint8),
+            auto_white_balance_gains=np.array([0.9, 1.0, 1.1], dtype=np.float32),
+            blur_map=np.zeros((8, 8), dtype=np.float32),
+        )
+        result = isp_to_reinhard(params)
+        assert result["gain_b"] == pytest.approx(0.9)
+        assert result["gain_g"] == pytest.approx(1.0)
+        assert result["gain_r"] == pytest.approx(1.1)
+
+    def test_exposure_clamped(self):
+        """Exposure stays within [0.2, 5.0]."""
+        extreme = ISPParams(
+            auto_exposure_lut=np.full(256, 255, dtype=np.uint8),
+            auto_white_balance_gains=np.array([1.0, 1.0, 1.0], dtype=np.float32),
+            blur_map=np.zeros((8, 8), dtype=np.float32),
+        )
+        result = isp_to_reinhard(extreme)
+        assert 0.2 <= result["exposure"] <= 5.0
+        assert 1.0 <= result["white_point"] <= 5.0

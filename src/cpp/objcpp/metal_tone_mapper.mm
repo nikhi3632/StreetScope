@@ -1,6 +1,7 @@
 #include <streetscope/inference/metal_tone_mapper.h>
 
 #import <Metal/Metal.h>
+#import <MetalPerformanceShaders/MetalPerformanceShaders.h>
 #import <CoreVideo/CoreVideo.h>
 #import <Foundation/Foundation.h>
 
@@ -302,6 +303,128 @@ struct MetalToneMapper::Impl {
         // Caller owns dst_pb — must CVPixelBufferRelease when done
         return dst_pb;
     }
+
+    std::vector<uint8_t> upscale_and_tone_map(const uint8_t* bgr, int w, int h,
+                                               int scale, const Params& params) {
+        if (scale < 1) {
+            throw std::invalid_argument("MetalToneMapper: scale must be >= 1");
+        }
+        if (scale == 1) {
+            return tone_map_bgr(bgr, w, h, params);
+        }
+
+        const int out_w = w * scale;
+        const int out_h = h * scale;
+        const auto pixel_count = static_cast<size_t>(w) * h;
+
+        // CPU: BGR -> BGRA at source resolution (~0.1ms for 512x288)
+        std::vector<uint8_t> bgra_in(pixel_count * 4);
+        for (size_t i = 0; i < pixel_count; i++) {
+            bgra_in[i * 4]     = bgr[i * 3];       // B
+            bgra_in[i * 4 + 1] = bgr[i * 3 + 1];   // G
+            bgra_in[i * 4 + 2] = bgr[i * 3 + 2];   // R
+            bgra_in[i * 4 + 3] = 255;               // A
+        }
+
+        // Source texture: Shared (CPU uploads via replaceRegion)
+        MTLTextureDescriptor* src_desc = [MTLTextureDescriptor
+            texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+                                         width:static_cast<NSUInteger>(w)
+                                        height:static_cast<NSUInteger>(h)
+                                     mipmapped:NO];
+        src_desc.usage = MTLTextureUsageShaderRead;
+        src_desc.storageMode = MTLStorageModeShared;
+        id<MTLTexture> src_tex = [device newTextureWithDescriptor:src_desc];
+
+        [src_tex replaceRegion:MTLRegionMake2D(0, 0,
+                                                static_cast<NSUInteger>(w),
+                                                static_cast<NSUInteger>(h))
+                   mipmapLevel:0
+                     withBytes:bgra_in.data()
+                   bytesPerRow:static_cast<NSUInteger>(w) * 4];
+
+        // Intermediate texture: Private (GPU-only, never touches CPU)
+        MTLTextureDescriptor* mid_desc = [MTLTextureDescriptor
+            texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+                                         width:static_cast<NSUInteger>(out_w)
+                                        height:static_cast<NSUInteger>(out_h)
+                                     mipmapped:NO];
+        mid_desc.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
+        mid_desc.storageMode = MTLStorageModePrivate;
+        id<MTLTexture> mid_tex = [device newTextureWithDescriptor:mid_desc];
+
+        // Output texture: Shared (GPU writes, CPU reads back)
+        MTLTextureDescriptor* dst_desc = [MTLTextureDescriptor
+            texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+                                         width:static_cast<NSUInteger>(out_w)
+                                        height:static_cast<NSUInteger>(out_h)
+                                     mipmapped:NO];
+        dst_desc.usage = MTLTextureUsageShaderWrite;
+        dst_desc.storageMode = MTLStorageModeShared;
+        id<MTLTexture> dst_tex = [device newTextureWithDescriptor:dst_desc];
+
+        // === Single command buffer: MPS Lanczos → Reinhard compute ===
+        id<MTLCommandBuffer> cmd = [command_queue commandBuffer];
+
+        // MPS Lanczos upscale (src_tex → mid_tex)
+        MPSImageLanczosScale* lanczos =
+            [[MPSImageLanczosScale alloc] initWithDevice:device];
+        MPSScaleTransform xform;
+        xform.scaleX = static_cast<double>(scale);
+        xform.scaleY = static_cast<double>(scale);
+        xform.translateX = 0.0;
+        xform.translateY = 0.0;
+        [lanczos setScaleTransform:&xform];
+        [lanczos encodeToCommandBuffer:cmd
+                         sourceTexture:src_tex
+                    destinationTexture:mid_tex];
+
+        // Reinhard tone map (mid_tex → dst_tex)
+        GPUToneMapParams gpu_params{};
+        gpu_params.exposure = params.exposure;
+        gpu_params.white_point = params.white_point;
+        gpu_params.gamma = params.gamma;
+        gpu_params.gain_b = params.gain_b;
+        gpu_params.gain_g = params.gain_g;
+        gpu_params.gain_r = params.gain_r;
+        gpu_params.width = out_w;
+        gpu_params.height = out_h;
+
+        id<MTLComputeCommandEncoder> encoder = [cmd computeCommandEncoder];
+        [encoder setComputePipelineState:bgra_pipeline];
+        [encoder setTexture:mid_tex atIndex:0];
+        [encoder setTexture:dst_tex atIndex:1];
+        [encoder setBytes:&gpu_params length:sizeof(gpu_params) atIndex:0];
+
+        MTLSize grid = MTLSizeMake(static_cast<NSUInteger>(out_w),
+                                   static_cast<NSUInteger>(out_h), 1);
+        NSUInteger tw = bgra_pipeline.threadExecutionWidth;
+        NSUInteger th = bgra_pipeline.maxTotalThreadsPerThreadgroup / tw;
+        MTLSize group = MTLSizeMake(tw, th, 1);
+        [encoder dispatchThreads:grid threadsPerThreadgroup:group];
+        [encoder endEncoding];
+
+        [cmd commit];
+        [cmd waitUntilCompleted];
+
+        // Readback: BGRA texture → BGR vector
+        const auto out_pixels = static_cast<size_t>(out_w) * out_h;
+        std::vector<uint8_t> bgra_out(out_pixels * 4);
+        [dst_tex getBytes:bgra_out.data()
+              bytesPerRow:static_cast<NSUInteger>(out_w) * 4
+               fromRegion:MTLRegionMake2D(0, 0,
+                                           static_cast<NSUInteger>(out_w),
+                                           static_cast<NSUInteger>(out_h))
+              mipmapLevel:0];
+
+        std::vector<uint8_t> result(out_pixels * 3);
+        for (size_t i = 0; i < out_pixels; i++) {
+            result[i * 3]     = bgra_out[i * 4];       // B
+            result[i * 3 + 1] = bgra_out[i * 4 + 1];   // G
+            result[i * 3 + 2] = bgra_out[i * 4 + 2];   // R
+        }
+        return result;
+    }
 };
 
 MetalToneMapper::MetalToneMapper()
@@ -317,6 +440,11 @@ std::vector<uint8_t> MetalToneMapper::tone_map(const uint8_t* bgr, int w, int h,
 void* MetalToneMapper::tone_map_pixelbuffer(void* cv_pixel_buffer,
                                              const Params& params) {
     return impl_->tone_map_pixelbuffer(cv_pixel_buffer, params);
+}
+
+std::vector<uint8_t> MetalToneMapper::upscale_and_tone_map(
+    const uint8_t* bgr, int w, int h, int scale, const Params& params) {
+    return impl_->upscale_and_tone_map(bgr, w, h, scale, params);
 }
 
 }  // namespace streetscope

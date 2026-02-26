@@ -329,7 +329,46 @@ PYBIND11_MODULE(streetscope_pipeline, m) {
             py::arg("gain_b") = 1.0f,
             py::arg("gain_g") = 1.0f,
             py::arg("gain_r") = 1.0f,
-            "Metal tone map a CVPixelBuffer. Returns new CVPixelBuffer capsule.");
+            "Metal tone map a CVPixelBuffer. Returns new CVPixelBuffer capsule.")
+        .def("upscale_and_tone_map", [](streetscope::MetalToneMapper& self,
+                                        py::array_t<uint8_t, py::array::c_style> frame,
+                                        int scale,
+                                        float exposure, float white_point, float gamma,
+                                        float gain_b, float gain_g, float gain_r) {
+            auto buf = frame.request();
+            if (buf.ndim != 3 || buf.shape[2] != 3) {
+                throw std::invalid_argument("frame must be (H, W, 3) uint8");
+            }
+            auto h = static_cast<int>(buf.shape[0]);
+            auto w = static_cast<int>(buf.shape[1]);
+            streetscope::MetalToneMapper::Params params{};
+            params.exposure = exposure;
+            params.white_point = white_point;
+            params.gamma = gamma;
+            params.gain_b = gain_b;
+            params.gain_g = gain_g;
+            params.gain_r = gain_r;
+            auto result = self.upscale_and_tone_map(
+                static_cast<const uint8_t*>(buf.ptr), w, h, scale, params);
+            int out_h = h * scale;
+            int out_w = w * scale;
+            auto* heap = new std::vector<uint8_t>(std::move(result));
+            auto capsule = py::capsule(heap, [](void* p) {
+                delete static_cast<std::vector<uint8_t>*>(p);
+            });
+            return py::array_t<uint8_t>(
+                {out_h, out_w, 3}, {out_w * 3, 3, 1}, heap->data(), capsule);
+        },
+            py::arg("frame"),
+            py::arg("scale"),
+            py::arg("exposure") = 1.0f,
+            py::arg("white_point") = 1.0f,
+            py::arg("gamma") = 2.2f,
+            py::arg("gain_b") = 1.0f,
+            py::arg("gain_g") = 1.0f,
+            py::arg("gain_r") = 1.0f,
+            "Fused MPS Lanczos upscale + Metal Reinhard in a single GPU submission. "
+            "Returns BGR numpy at (H*scale, W*scale, 3).");
 
     // --- DetectionResult ---
     py::class_<streetscope::DetectionResult>(m, "DetectionResult")

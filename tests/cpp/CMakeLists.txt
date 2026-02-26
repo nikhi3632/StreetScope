@@ -61,6 +61,7 @@ if(APPLE AND TARGET streetscope_metal)
     target_link_libraries(test_metal_tone_map PRIVATE
         streetscope_metal streetscope_simd_core streetscope_warnings
         GTest::gtest_main
+        "-framework CoreML"
         "-framework Metal"
         "-framework CoreVideo"
         "-framework Foundation"

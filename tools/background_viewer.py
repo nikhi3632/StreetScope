@@ -142,7 +142,7 @@ def run(url: str, alpha: float, threshold: int, warmup: int, duration: int) -> N
                         last_frame = frame
                         last_fm = fm
 
-                        # Background update (synchronous, < 1ms)
+                        # Background update (synchronous)
                         mask, _ = bg_model.update(frame)
                         last_mask = mask
 
